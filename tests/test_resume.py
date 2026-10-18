@@ -10,13 +10,15 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from codex_resume.app import AppError, Desktop, MAX_FRAME, ThreadUnavailable, open_selected_thread
+from codex_resume.app import (AppError, Desktop, MAX_FRAME, ThreadUnavailable,
+                              WindowsPipe, check_version, open_selected_thread)
 from codex_resume.__main__ import watch_process_spec
 from codex_resume.controller import Controller
 from codex_resume.policy import decide, fingerprint, quota_status, latest_turn
 from codex_resume.rpc import ReadOnlyServer
 from codex_resume.store import Store
 from codex_resume.tasks import list_conversations, stored_assessment, inspect_task
+from codex_resume.runtime import WINDOWS_PIPE, codex_binary, default_app_path
 
 THREAD = '11111111-1111-4111-8111-111111111111'
 
@@ -35,6 +37,36 @@ class SourceLaunchTests(unittest.TestCase):
         self.assertEqual(command[-2:], ['--limit-id', 'codex'])
         self.assertIsNone(env)
         self.assertEqual(cwd.name, 'codex-auto-resume')
+
+    @patch.dict(os.environ, {'LOCALAPPDATA': r'C:\Users\test\AppData\Local'})
+    def test_windows_defaults_to_relocated_bundled_cli(self):
+        path = default_app_path('windows')
+        self.assertEqual(str(path).replace('\\', '/'),
+                         'C:/Users/test/AppData/Local/OpenAI/Codex/bin/codex.exe')
+        self.assertEqual(codex_binary(path, 'windows'), path)
+
+    def test_windows_watcher_does_not_receive_posix_descriptor(self):
+        args = self.args()
+        command, _, _ = watch_process_spec(args, None)
+        self.assertNotIn('--lock-fd', command)
+
+    def test_macos_resolves_new_bundled_cli_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / 'ChatGPT.app'
+            cli = app / 'Contents/Resources/codex-cli/bin/codex'
+            cli.parent.mkdir(parents=True)
+            cli.touch()
+            self.assertEqual(codex_binary(app), cli)
+
+    def test_macos_preserves_legacy_cli_and_prefers_new_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / 'ChatGPT.app'
+            legacy = app / 'Contents/Resources/codex'
+            legacy.parent.mkdir(parents=True); legacy.touch()
+            self.assertEqual(codex_binary(app, 'macos'), legacy)
+            current = legacy.parent / 'codex-cli/bin/codex'
+            current.parent.mkdir(parents=True); current.touch()
+            self.assertEqual(codex_binary(app, 'macos'), current)
 
 
 def state(status='failed', error='usageLimitExceeded', turn_id='t1'):
@@ -359,7 +391,7 @@ class TaskDiscoveryTests(unittest.TestCase):
     @patch('codex_resume.app.subprocess.run')
     @patch('codex_resume.app.check_version')
     def test_navigation_only_uses_validated_original_uuid_without_prompt(self, version, run):
-        open_selected_thread('/Applications/Test.app', THREAD)
+        open_selected_thread('/Applications/Test.app', THREAD, system='macos')
         self.assertEqual(run.call_args.args[0], ['/usr/bin/open','-g','-a',
             '/Applications/Test.app','codex://threads/'+THREAD])
         run.reset_mock()
@@ -652,6 +684,78 @@ class FakeSocket:
 
 
 class TransportTests(unittest.TestCase):
+    def test_windows_pipe_uses_exact_app_endpoint_and_byte_stream(self):
+        class Operation:
+            event = object()
+            def __init__(self, data=b'', count=None, result_error=0):
+                self.data = bytes(data)
+                self.count = len(self.data) if count is None else count
+                self.result_error = result_error
+                self.cancelled = False
+            def GetOverlappedResult(self, _wait): return self.count, self.result_error
+            def getbuffer(self): return memoryview(self.data)
+            def cancel(self): self.cancelled = True
+        class API:
+            GENERIC_READ=1; GENERIC_WRITE=2; NULL=0; OPEN_EXISTING=3; FILE_FLAG_OVERLAPPED=4
+            ERROR_IO_PENDING=997; ERROR_SEM_TIMEOUT=121; ERROR_PIPE_BUSY=231; ERROR_MORE_DATA=234
+            ERROR_BROKEN_PIPE=109; WAIT_TIMEOUT=258
+            def __init__(self): self.writes=[]; self.closed=[]; self.reads=[b'ab', b'c']
+            def WaitNamedPipe(self, endpoint, timeout): self.endpoint, self.wait = endpoint, timeout
+            def CreateFile(self, *args): self.created=args; return 42
+            def WriteFile(self, _handle, data, overlapped):
+                self.writes.append(bytes(data)); return Operation(count=len(data)), 0
+            def ReadFile(self, _handle, _size, overlapped):
+                data = self.reads.pop(0)
+                return Operation(data, result_error=self.ERROR_MORE_DATA if data == b'ab' else 0), 0
+            def PeekNamedPipe(self, _handle): return (len(self.reads), 0)
+            def WaitForMultipleObjects(self, *_args): return 0
+            def CloseHandle(self, handle): self.closed.append(handle)
+        api=API(); pipe=WindowsPipe(timeout=1, api=api)
+        self.assertEqual(api.endpoint, WINDOWS_PIPE)
+        pipe.sendall(b'frame'); self.assertEqual(api.writes, [b'frame'])
+        self.assertEqual(pipe.recv(2), b'ab'); self.assertTrue(pipe.has_data())
+        pipe.close(); self.assertEqual(api.closed, [42])
+
+    @patch('codex_resume.app.windows_package_version', return_value='26.901.31953.0')
+    @patch('codex_resume.app.subprocess.run')
+    def test_windows_version_requires_exact_package_and_cli(self, run, package):
+        run.return_value = SimpleNamespace(returncode=0, stdout='codex-cli 0.153.1\n')
+        with tempfile.TemporaryDirectory() as directory:
+            binary=Path(directory)/'codex.exe'; binary.touch()
+            result=check_version(binary, 'windows')
+        self.assertEqual(result['platform'], 'windows')
+        self.assertEqual(result['cliVersion'], '0.153.1')
+
+    @patch('codex_resume.app.windows_package_version', return_value='99.0.0.0')
+    @patch('codex_resume.app.subprocess.run')
+    def test_windows_future_version_fails_closed(self, run, package):
+        run.return_value = SimpleNamespace(returncode=0, stdout='codex-cli 0.153.1\n')
+        with tempfile.TemporaryDirectory() as directory:
+            binary=Path(directory)/'codex.exe'; binary.touch()
+            with self.assertRaises(AppError): check_version(binary, 'windows')
+
+    def test_optional_ephemeral_normalization_is_limited_to_verified_build(self):
+        versions = [None,
+            {'platform':'macos', 'version':'26.820.60940', 'build':'7119'},
+            {'platform':'macos', 'version':'26.1002.52244', 'build':'13536'}]
+        for info in versions:
+            for value in ('missing', False, True, None):
+                with self.subTest(info=info, ephemeral=value):
+                    raw = state()
+                    if value == 'missing':
+                        del raw['ephemeral']
+                    else:
+                        raw['ephemeral'] = value
+                    app = Desktop('/unused'); app.app_info = info
+                    def receive(_deadline):
+                        app.snapshot_value = raw
+                    with patch.object(app, 'request', return_value={'handledByClientId':'owner'}), \
+                            patch.object(app, 'follow'), patch.object(app, '_read', side_effect=receive):
+                        snapshot = app.snapshot(THREAD)
+                    expected = value is False or (value == 'missing' and info == versions[-1])
+                    self.assertEqual(decide(snapshot).action == 'resume', expected)
+                    self.assertEqual('ephemeral' in raw, value != 'missing')
+
     @patch('codex_resume.app.check_version')
     def test_resume_observes_already_queued_ipc_events_before_dispatch(self, check):
         import socket
@@ -735,6 +839,32 @@ class TransportTests(unittest.TestCase):
 
 
 class StartupTests(unittest.TestCase):
+    @patch('codex_resume.__main__.platform_name', return_value='windows')
+    @patch('codex_resume.__main__.check_version')
+    @patch('codex_resume.__main__.inspect_task', return_value={'canMonitor': True})
+    def test_windows_start_uses_detached_process_without_inherited_descriptor(self, inspect, version, system):
+        from codex_resume.__main__ import main
+        with tempfile.TemporaryDirectory() as directory:
+            def spawn(*args, **kwargs):
+                self.assertNotIn('pass_fds', kwargs)
+                self.assertNotIn('start_new_session', kwargs)
+                self.assertTrue(kwargs['creationflags'] & 0x00000008)
+                child_store = Store(directory)
+                try:
+                    child_store.update(THREAD, 'watching', 'synthetic Windows child')
+                finally:
+                    child_store.close()
+                return SimpleNamespace(pid=321, poll=lambda: None)
+            with patch('codex_resume.__main__.subprocess.Popen', side_effect=spawn):
+                main(['--state-dir', directory, 'start', THREAD])
+            ledger = Store(directory)
+            try:
+                self.assertEqual(ledger.get(THREAD)['status'], 'watching')
+                ledger.lock(THREAD)
+            finally:
+                ledger.close()
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX inherited descriptor test')
     @patch('codex_resume.__main__.check_version')
     @patch('codex_resume.__main__.inspect_task', return_value={'canMonitor': True})
     def test_second_start_during_spawn_cannot_replace_budget(self, inspect, version):
@@ -764,7 +894,8 @@ class StartupTests(unittest.TestCase):
     @patch('codex_resume.__main__.inspect_task', return_value={'canMonitor': True})
     def test_log_or_spawn_failure_disables_starting_watch(self, inspect, version):
         from codex_resume.__main__ import main
-        for failure in ('log', 'spawn', 'spawn_after_stop'):
+        failures = ('spawn', 'spawn_after_stop') if os.name == 'nt' else ('log', 'spawn', 'spawn_after_stop')
+        for failure in failures:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 if failure == 'log':
                     (Path(directory) / (THREAD + '.log')).symlink_to(Path(directory) / 'absent')
@@ -793,7 +924,99 @@ class StartupTests(unittest.TestCase):
                     ledger.close()
 
 
+@unittest.skipUnless(os.sys.platform == 'darwin', 'macOS compatibility')
+class MacCompatibilityTests(unittest.TestCase):
+    def write_app_info(self, root, version='26.1002.52244', build='13536', bundle='com.openai.codex'):
+        import plistlib
+        app = root / 'ChatGPT.app'
+        contents = app / 'Contents'; contents.mkdir(parents=True, exist_ok=True)
+        (contents / 'Info.plist').write_bytes(plistlib.dumps({
+            'CFBundleIdentifier':bundle, 'CFBundleShortVersionString':version, 'CFBundleVersion':build}))
+        return app
+
+    def test_macos_rejects_changed_build_and_wrong_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for build, bundle in [('13537', 'com.openai.codex'), ('13536', 'com.openai.chat')]:
+                with self.subTest(build=build, bundle=bundle):
+                    app = self.write_app_info(Path(directory), build=build, bundle=bundle)
+                    with self.assertRaises(AppError):
+                        check_version(app, 'macos')
+
+    def test_macos_unix_socket_full_resume_exchange_with_simulated_app(self):
+        """Real Unix socket, simulated App only; never contacts a user task."""
+        import socket
+        import threading
+        with tempfile.TemporaryDirectory(dir='/tmp') as directory:
+            root = Path(directory)
+            app_path = self.write_app_info(root)
+            ipc = root / 'ipc'; ipc.mkdir(mode=0o700)
+            endpoint = ipc / 'ipc.sock'
+            messages, errors = [], []
+            raw = state(); del raw['ephemeral']
+            raw['threadRuntimeStatus'] = {'type':'systemError'}
+            def exact(conn, size):
+                data = b''
+                while len(data) < size:
+                    chunk = conn.recv(size - len(data))
+                    if not chunk:
+                        raise EOFError('simulated socket closed')
+                    data += chunk
+                return data
+            def serve(listener):
+                try:
+                    conn, _ = listener.accept()
+                    with conn:
+                        conn.settimeout(5)
+                        def send(message):
+                            data = json.dumps(message).encode()
+                            conn.sendall(struct.pack('<I', len(data)) + data)
+                        while True:
+                            msg = json.loads(exact(conn, struct.unpack('<I', exact(conn, 4))[0]))
+                            messages.append(msg)
+                            method = msg['method']
+                            if msg['type'] == 'broadcast':
+                                if msg['params']['following']:
+                                    send({'type':'broadcast', 'sourceClientId':'owner',
+                                        'method':'thread-stream-state-changed', 'version':11,
+                                        'params':{'hostId':'local', 'conversationId':THREAD,
+                                            'change':{'type':'snapshot', 'revision':1, 'conversationState':raw}}})
+                                continue
+                            result = ({'clientId':'test-client'} if method == 'initialize' else
+                                      {'result':{'turn':{'id':'simulated-new-turn'}}} if method == 'thread-follower-start-turn' else {})
+                            send({'type':'response', 'requestId':msg['requestId'], 'method':method,
+                                  'resultType':'success', 'result':result, 'handledByClientId':'owner'})
+                            if method == 'thread-follower-start-turn':
+                                return
+                except Exception as exc:
+                    errors.append(exc)
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                listener.bind(str(endpoint)); endpoint.chmod(0o600)
+                listener.listen(1); listener.settimeout(5)
+                worker = threading.Thread(target=serve, args=(listener,), daemon=True)
+                worker.start()
+                try:
+                    with Desktop(root, app_path, timeout=3, system='macos') as app:
+                        current = app.snapshot(THREAD)
+                        self.assertEqual(decide(current).action, 'resume')
+                        self.assertEqual(app.resume(THREAD, fingerprint(current), 'simulated-message'),
+                                         'simulated-new-turn')
+                finally:
+                    worker.join(6)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+            requests = [m for m in messages if m['type'] == 'request']
+            self.assertEqual([(m['method'], m['version']) for m in requests], [
+                ('initialize', 0), ('thread-owner-discovery', 1),
+                ('thread-owner-discovery', 1), ('thread-follower-start-turn', 2)])
+            sent = requests[-1]
+            self.assertEqual(sent['targetClientId'], 'owner')
+            self.assertEqual(sent['params']['conversationId'], THREAD)
+            self.assertEqual(set(sent['params']['turnStart']['request']),
+                             {'threadId', 'clientUserMessageId', 'input'})
+
+
 class IntegrationTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'POSIX inherited descriptor test')
     def test_inherited_lock_survives_parent_close_and_is_not_reinherited(self):
         import select
         import subprocess
@@ -827,6 +1050,7 @@ class IntegrationTests(unittest.TestCase):
                 if child.poll() is None:
                     child.kill(); child.communicate(timeout=5)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX inherited descriptor test')
     def test_inherited_lock_rejects_unrelated_file_descriptor(self):
         with tempfile.TemporaryDirectory() as directory:
             ledger = Store(directory)
@@ -838,6 +1062,7 @@ class IntegrationTests(unittest.TestCase):
             finally:
                 ledger.close()
 
+    @unittest.skipIf(os.name == 'nt', 'portable subprocess fixture uses a POSIX shebang')
     def test_rpc_real_subprocess_coalesced_notifications(self):
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / 'server'
@@ -856,6 +1081,23 @@ for line in sys.stdin:
                 process = server.process
             self.assertIsNotNone(process.poll())
 
+    @unittest.skipIf(os.name == 'nt', 'portable subprocess fixture uses a POSIX shebang')
+    def test_rpc_windows_reader_does_not_use_fd_selector(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / 'server'
+            script.write_text("#!/usr/bin/env python3\n" + """
+import json,sys
+for line in sys.stdin:
+    data=json.loads(line)
+    if 'id' not in data: continue
+    result={'ok': True} if data['method']=='initialize' else {'rateLimits': {'windows': True}}
+    sys.stdout.write(json.dumps({'id':data['id'],'result':result})+'\\n'); sys.stdout.flush()
+""")
+            script.chmod(0o700)
+            with ReadOnlyServer(script, directory, timeout=10, system='windows') as server:
+                self.assertEqual(server.query('account/rateLimits/read'), {'rateLimits': {'windows': True}})
+                self.assertIsNone(server.selector)
+
     def test_version_mismatch_is_closed(self):
         import plistlib
         from codex_resume.app import check_version
@@ -865,6 +1107,17 @@ for line in sys.stdin:
                 'CFBundleVersion':'future', 'CFBundleShortVersionString':'next'}))
             with self.assertRaises(AppError): check_version(directory)
 
+    def test_current_macos_version_is_explicitly_supported(self):
+        import plistlib
+        from codex_resume.app import check_version
+        with tempfile.TemporaryDirectory() as directory:
+            contents=Path(directory)/'Contents'; contents.mkdir()
+            (contents/'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':'com.openai.codex',
+                'CFBundleVersion':'13536', 'CFBundleShortVersionString':'26.1002.52244'}))
+            self.assertEqual(check_version(directory), {'platform':'macos',
+                'version':'26.1002.52244', 'build':'13536'})
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX ownership and mode test')
     def test_private_directory_rejects_shared_permissions(self):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory).chmod(0o755)
