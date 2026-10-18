@@ -56,7 +56,7 @@ class SourceLaunchTests(unittest.TestCase):
             cli = app / 'Contents/Resources/codex-cli/bin/codex'
             cli.parent.mkdir(parents=True)
             cli.touch()
-            self.assertEqual(codex_binary(app), cli)
+            self.assertEqual(codex_binary(app, 'macos'), cli)
 
     def test_macos_preserves_legacy_cli_and_prefers_new_layout(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1105,7 +1105,7 @@ for line in sys.stdin:
             contents=Path(directory)/'Contents'; contents.mkdir()
             (contents/'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':'com.openai.codex',
                 'CFBundleVersion':'future', 'CFBundleShortVersionString':'next'}))
-            with self.assertRaises(AppError): check_version(directory)
+            with self.assertRaises(AppError): check_version(directory, 'macos')
 
     def test_current_macos_version_is_explicitly_supported(self):
         import plistlib
@@ -1114,7 +1114,7 @@ for line in sys.stdin:
             contents=Path(directory)/'Contents'; contents.mkdir()
             (contents/'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':'com.openai.codex',
                 'CFBundleVersion':'13536', 'CFBundleShortVersionString':'26.1002.52244'}))
-            self.assertEqual(check_version(directory), {'platform':'macos',
+            self.assertEqual(check_version(directory, 'macos'), {'platform':'macos',
                 'version':'26.1002.52244', 'build':'13536'})
 
     @unittest.skipIf(os.name == 'nt', 'POSIX ownership and mode test')
