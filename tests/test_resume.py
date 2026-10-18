@@ -254,7 +254,7 @@ class TaskDiscoveryTests(unittest.TestCase):
     @patch('codex_resume.tasks.ReadOnlyServer')
     @patch('codex_resume.tasks.Desktop')
     def test_unloaded_selection_falls_back_to_read_only_history(self, desktop, server, _open_thread):
-        desktop.return_value.__enter__.return_value.snapshot.side_effect = [ThreadUnavailable(), ThreadUnavailable()]
+        desktop.return_value.__enter__.return_value.snapshot.side_effect = ThreadUnavailable()
         reader = server.return_value.__enter__.return_value
         reader.query.side_effect = [{'data':[], 'nextCursor':None}, {'thread': self.stored('inProgress')}]
         result = inspect_task(Path('/home'), Path('/app'), THREAD)
@@ -266,7 +266,7 @@ class TaskDiscoveryTests(unittest.TestCase):
     @patch('codex_resume.tasks.Desktop')
     def test_socket_timeout_selection_falls_back_to_read_only_history(self, desktop, server, _open_thread):
         import socket
-        desktop.return_value.__enter__.return_value.snapshot.side_effect = [socket.timeout, socket.timeout]
+        desktop.return_value.__enter__.return_value.snapshot.side_effect = socket.timeout
         reader = server.return_value.__enter__.return_value
         reader.query.side_effect = [{'data':[], 'nextCursor':None}, {'thread': self.stored('inProgress')}]
         result = inspect_task(Path('/home'), Path('/app'), THREAD)
@@ -277,10 +277,13 @@ class TaskDiscoveryTests(unittest.TestCase):
     @patch('codex_resume.tasks.open_selected_thread')
     @patch('codex_resume.tasks.ReadOnlyServer')
     @patch('codex_resume.tasks.Desktop')
-    def test_not_loaded_interrupted_history_reopens_exact_thread_for_live_state(self, desktop, server, open_thread):
+    @patch('codex_resume.tasks.time.sleep')
+    def test_not_loaded_interrupted_history_retries_until_live_state_is_ready(
+            self, sleep, desktop, server, open_thread):
         live = state('interrupted')
         live['threadRuntimeStatus'] = {'type': 'active', 'activeFlags': []}
-        desktop.return_value.__enter__.return_value.snapshot.side_effect = [ThreadUnavailable(), live]
+        desktop.return_value.__enter__.return_value.snapshot.side_effect = [
+            ThreadUnavailable(), ThreadUnavailable(), ThreadUnavailable(), live]
         reader = server.return_value.__enter__.return_value
         reader.query.return_value = {'data': [], 'nextCursor': None}
         result = inspect_task(Path('/home'), Path('/app'), THREAD)
@@ -289,7 +292,29 @@ class TaskDiscoveryTests(unittest.TestCase):
         self.assertEqual(result['source'], 'live')
         self.assertTrue(result['openedSelectedThread'])
         open_thread.assert_called_once_with(Path('/app'), THREAD)
-        self.assertEqual(desktop.return_value.__enter__.return_value.snapshot.call_count, 2)
+        self.assertEqual(desktop.return_value.__enter__.return_value.snapshot.call_count, 4)
+        self.assertEqual(sleep.call_count, 2)
+        sleep.assert_called_with(0.25)
+
+    @patch('codex_resume.tasks.open_selected_thread')
+    @patch('codex_resume.tasks.ReadOnlyServer')
+    @patch('codex_resume.tasks.Desktop')
+    @patch('codex_resume.tasks.time.sleep')
+    def test_live_reopen_stops_after_bounded_attempts(self, sleep, desktop, server, open_thread):
+        desktop.return_value.__enter__.return_value.snapshot.side_effect = ThreadUnavailable()
+        reader = server.return_value.__enter__.return_value
+        reader.query.side_effect = [{'data': [], 'nextCursor': None}, {'thread': self.stored('interrupted')}]
+
+        result = inspect_task(Path('/home'), Path('/app'), THREAD)
+
+        self.assertFalse(result['canMonitor'])
+        self.assertEqual(result['taskState'], 'interrupted')
+        self.assertEqual(desktop.return_value.__enter__.return_value.snapshot.call_count, 1 + 9)
+        self.assertEqual(sleep.call_count, 8)
+        open_thread.assert_called_once_with(Path('/app'), THREAD)
+        retry_timeouts = [call.kwargs['timeout'] for call in desktop.call_args_list[1:]]
+        self.assertEqual(len(retry_timeouts), 9)
+        self.assertTrue(all(0 < timeout <= 0.75 for timeout in retry_timeouts))
 
     @patch('codex_resume.tasks.ReadOnlyServer')
     @patch('codex_resume.tasks.Desktop')

@@ -9,6 +9,10 @@ from .rpc import ReadOnlyServer
 
 SOURCES = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview',
            'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown']
+LIVE_REOPEN_ATTEMPTS = 9
+LIVE_REOPEN_RETRY_INTERVAL = 0.25
+LIVE_REOPEN_TIMEOUT = 5.0
+LIVE_REOPEN_ATTEMPT_TIMEOUT = 0.75
 
 
 def list_conversations(server, archive_filters=(False, True)):
@@ -75,9 +79,13 @@ def stored_assessment(thread, thread_id):
     return result
 
 
-def live_assessment(home, app_path, thread_id):
-    with Desktop(home, app_path) as desktop:
-        state = desktop.snapshot(thread_id)
+def live_assessment(home, app_path, thread_id, timeout=None):
+    if timeout is None:
+        desktop = Desktop(home, app_path)
+    else:
+        desktop = Desktop(home, app_path, timeout=timeout)
+    with desktop as client:
+        state = client.snapshot(thread_id)
     decision = decide(state)
     if decision.task_state == 'connecting':
         return None
@@ -108,18 +116,35 @@ def inspect_task(home, app_path, thread_id):
             return result
     except (ConnectionUnavailable, ConnectionError, FileNotFoundError, TimeoutError, socket.timeout):
         pass
+    # A selected thread can be active in the App while the read-only index
+    # still reports it as notLoaded and the persisted turn tail is stale.
+    # Opening the exact UUID is navigation only; fresh live state is still
+    # required before enrollment. App loading is asynchronous, so poll briefly
+    # rather than making one timing-sensitive snapshot attempt.
     try:
-        # A selected thread can be active in the App while the read-only index
-        # still reports it as notLoaded and the persisted turn tail is stale.
-        # Opening the exact UUID is navigation only; a fresh snapshot is still
-        # required before enrollment and history is never used to dispatch.
         open_selected_thread(app_path, thread_id)
-        time.sleep(1)
-        result = live_assessment(home, app_path, thread_id)
-        if result is not None:
-            return dict(result, openedSelectedThread=True)
     except (ConnectionUnavailable, ConnectionError, FileNotFoundError, TimeoutError, socket.timeout):
         pass
+    else:
+        transient = (ConnectionUnavailable, ConnectionError, FileNotFoundError,
+                     TimeoutError, socket.timeout)
+        deadline = time.monotonic() + LIVE_REOPEN_TIMEOUT
+        for attempt in range(LIVE_REOPEN_ATTEMPTS):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.05:
+                break
+            # Snapshot uses one App request and one stream wait; halve the
+            # remaining budget so a slow attempt cannot overrun the whole poll.
+            timeout = min(LIVE_REOPEN_ATTEMPT_TIMEOUT, remaining / 2)
+            try:
+                result = live_assessment(home, app_path, thread_id, timeout=timeout)
+            except transient:
+                result = None
+            if result is not None:
+                return dict(result, openedSelectedThread=True)
+            remaining = deadline - time.monotonic()
+            if attempt + 1 < LIVE_REOPEN_ATTEMPTS and remaining > 0:
+                time.sleep(min(LIVE_REOPEN_RETRY_INTERVAL, remaining))
     with ReadOnlyServer(app_path / 'Contents/Resources/codex', home) as server:
         response = server.query('thread/read', {'threadId': thread_id, 'includeTurns': True})
     return stored_assessment(response.get('thread'), thread_id)
