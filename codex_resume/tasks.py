@@ -3,13 +3,17 @@ import socket
 import time
 import uuid
 
-from .app import ConnectionUnavailable, Desktop
+from .app import ConnectionUnavailable, Desktop, open_selected_thread
 from .policy import decide, interrupted_context_picker, quota_failure
 from .rpc import ReadOnlyServer
 from .runtime import codex_binary
 
 SOURCES = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview',
            'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown']
+LIVE_REOPEN_ATTEMPTS = 9
+LIVE_REOPEN_RETRY_INTERVAL = 0.25
+LIVE_REOPEN_TIMEOUT = 5.0
+LIVE_REOPEN_ATTEMPT_TIMEOUT = 0.75
 
 
 def list_conversations(server, archive_filters=(False, True)):
@@ -76,6 +80,26 @@ def stored_assessment(thread, thread_id):
     return result
 
 
+def live_assessment(home, app_path, thread_id, timeout=None):
+    if timeout is None:
+        desktop = Desktop(home, app_path)
+    else:
+        desktop = Desktop(home, app_path, timeout=timeout)
+    with desktop as client:
+        state = client.snapshot(thread_id)
+    decision = decide(state)
+    if decision.task_state == 'connecting':
+        return None
+    return {'threadId': thread_id, 'title': state.get('title'),
+            'decision': decision.action, 'reason': decision.reason,
+            'taskState': decision.task_state,
+            'canMonitor': decision.task_state in ('running', 'quota_limited'),
+            'source': 'live', 'connection': 'connected', 'checkedAt': time.time(),
+            'runtime': state.get('threadRuntimeStatus'), 'model': state.get('latestModel'),
+            'ignoredInterruptedPickerRequests': sum(interrupted_context_picker(state, r)
+                for r in state.get('requests', [])) if isinstance(state.get('requests'), list) else 0}
+
+
 def inspect_task(home, app_path, thread_id):
     thread_id = str(uuid.UUID(thread_id))
     # Archiving is a user stop signal, even if the last persisted turn was still
@@ -88,20 +112,40 @@ def inspect_task(home, app_path, thread_id):
                 'source': 'history', 'connection': 'not_checked', 'checkedAt': time.time(),
                 'reason': '这个对话已归档，不会加入托管或自动打开'}
     try:
-        with Desktop(home, app_path) as desktop:
-            state = desktop.snapshot(thread_id)
-        decision = decide(state)
-        if decision.task_state != 'connecting':
-            return {'threadId': thread_id, 'title': state.get('title'),
-                    'decision': decision.action, 'reason': decision.reason,
-                    'taskState': decision.task_state,
-                    'canMonitor': decision.task_state in ('running', 'quota_limited'),
-                    'source': 'live', 'connection': 'connected', 'checkedAt': time.time(),
-                    'runtime': state.get('threadRuntimeStatus'), 'model': state.get('latestModel'),
-                    'ignoredInterruptedPickerRequests': sum(interrupted_context_picker(state, r)
-                        for r in state.get('requests', [])) if isinstance(state.get('requests'), list) else 0}
+        result = live_assessment(home, app_path, thread_id)
+        if result is not None:
+            return result
     except (ConnectionUnavailable, ConnectionError, FileNotFoundError, TimeoutError, socket.timeout):
         pass
+    # A selected thread can be active in the App while the read-only index
+    # still reports it as notLoaded and the persisted turn tail is stale.
+    # Opening the exact UUID is navigation only; fresh live state is still
+    # required before enrollment. App loading is asynchronous, so poll briefly
+    # rather than making one timing-sensitive snapshot attempt.
+    try:
+        open_selected_thread(app_path, thread_id)
+    except (ConnectionUnavailable, ConnectionError, FileNotFoundError, TimeoutError, socket.timeout):
+        pass
+    else:
+        transient = (ConnectionUnavailable, ConnectionError, FileNotFoundError,
+                     TimeoutError, socket.timeout)
+        deadline = time.monotonic() + LIVE_REOPEN_TIMEOUT
+        for attempt in range(LIVE_REOPEN_ATTEMPTS):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.05:
+                break
+            # Snapshot uses one App request and one stream wait; halve the
+            # remaining budget so a slow attempt cannot overrun the whole poll.
+            timeout = min(LIVE_REOPEN_ATTEMPT_TIMEOUT, remaining / 2)
+            try:
+                result = live_assessment(home, app_path, thread_id, timeout=timeout)
+            except transient:
+                result = None
+            if result is not None:
+                return dict(result, openedSelectedThread=True)
+            remaining = deadline - time.monotonic()
+            if attempt + 1 < LIVE_REOPEN_ATTEMPTS and remaining > 0:
+                time.sleep(min(LIVE_REOPEN_RETRY_INTERVAL, remaining))
     with ReadOnlyServer(codex_binary(app_path), home) as server:
         response = server.query('thread/read', {'threadId': thread_id, 'includeTurns': True})
     return stored_assessment(response.get('thread'), thread_id)
