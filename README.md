@@ -64,7 +64,7 @@ It does **not** switch accounts, buy credits, redeem resets, approve tool calls,
 - macOS, or Windows 11
 - Python 3.9 or newer
 - The Codex desktop app installed, signed in, and kept open
-- Verified macOS App version: `26.820.60940 / build 7119`
+- Adapted macOS App versions: `26.820.60940 / build 7119`, `26.1002.52244 / build 13536`
 - Currently adapted Windows versions: App `26.901.31953.0`, CLI `0.153.1`
 - Default path: macOS `/Applications/ChatGPT.app`; Windows `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`
 

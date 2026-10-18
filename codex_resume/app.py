@@ -14,7 +14,10 @@ import uuid
 from .policy import decide, fingerprint
 from .runtime import WINDOWS_PIPE, codex_binary, platform_name, windows_package_version
 
-SUPPORTED_MAC_APPS = {('26.820.60940', '7119')}
+SUPPORTED_MAC_APPS = {
+    ('26.820.60940', '7119'),
+    ('26.1002.52244', '13536'),
+}
 SUPPORTED_WINDOWS_APPS = {'26.901.31953.0', '26.901.31953'}
 SUPPORTED_WINDOWS_CLIS = {'0.153.1'}
 MAX_FRAME = 32 * 1024 * 1024
@@ -154,6 +157,7 @@ class Desktop:
         self.home, self.app_path, self.timeout = Path(home), Path(app_path), timeout
         self.system = system or platform_name()
         self.transport_factory = transport_factory
+        self.app_info = None
         self.sock = None
         self.client_id = 'initializing-client'
         self.owner = None
@@ -163,7 +167,7 @@ class Desktop:
         self.state_generation = 0
 
     def __enter__(self):
-        check_version(self.app_path, self.system)
+        self.app_info = check_version(self.app_path, self.system)
         if self.system == 'windows':
             self.sock = (self.transport_factory or WindowsPipe)(WINDOWS_PIPE, self.timeout)
             try:
@@ -292,6 +296,13 @@ class Desktop:
         state = self.snapshot_value
         if not isinstance(state, dict) or state.get('id') != self.thread_id:
             raise AppError('App 返回了不匹配的任务状态')
+        # This build copies the optional thread.ephemeral into its snapshot.
+        # JSON omits undefined; its isEphemeralConversation uses === true.
+        # Normalize only this verified build; the policy remains fail-closed
+        # for missing fields from other versions and for explicit null/true.
+        if (self.app_info == {'platform': 'macos', 'version': '26.1002.52244', 'build': '13536'}
+                and 'ephemeral' not in state):
+            state = dict(state, ephemeral=False)
         return state
 
     def _drain_pending(self):

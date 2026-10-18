@@ -1,11 +1,13 @@
 # 版本记录
 
-## 0.3.0 — Windows 适配（未发布）
+## 0.3.0 — Windows 与新版 macOS 适配（2026-10-18）
 
 - 新增 Windows 命名管道 IPC、Windows 文件锁和后台 watcher 启动支持。
 - 新增 `resume.cmd` 与 `resume.ps1`，支持在 PowerShell 或命令提示符中直接启动。
 - 自动定位 Windows Codex App 复制到用户目录的 `codex.exe`，并核验 Store/MSIX App 与 CLI 版本。
 - 保留精确版本保护；Windows 自动化路径已通过隔离测试，并在 Windows 11 实机、ChatGPT 免费账号上完成一次真实自然额度重置后的原任务自动续跑验证。
+- 适配 macOS Codex App `26.1002.52244 / build 13536` 的 CLI 路径与会话快照格式；对该精确版本运行 `doctor` 可通过 IPC 与额度读取检查。
+- 为新版 macOS Unix socket 协议增加隔离回归测试；未将隔离测试表述为真实额度重置/续跑验证。
 
 ## 0.2.0 — 源码精简版（2026-08-29）
 

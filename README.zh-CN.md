@@ -63,7 +63,7 @@
 - macOS，或 Windows 11
 - Python 3.9 或更高版本
 - 已安装、登录并保持打开的 Codex 桌面 App
-- macOS 当前验证版本：`26.820.60940 / build 7119`
+- macOS 当前适配版本：`26.820.60940 / build 7119`、`26.1002.52244 / build 13536`
 - Windows 当前适配版本：App `26.901.31953.0`、CLI `0.153.1`
 - 默认路径：macOS `/Applications/ChatGPT.app`；Windows `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`
 

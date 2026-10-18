@@ -37,7 +37,10 @@ def codex_binary(app_path, system=None):
             candidates.extend((path / 'codex.exe', path / 'resources' / 'codex.exe',
                                path / 'OpenAI' / 'Codex' / 'bin' / 'codex.exe'))
         return next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
-    return path / 'Contents' / 'Resources' / 'codex'
+    resources = path / 'Contents' / 'Resources'
+    # Newer macOS builds package the CLI as a versioned app resource bundle.
+    candidates = (resources / 'codex-cli' / 'bin' / 'codex', resources / 'codex')
+    return next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
 
 
 def windows_package_version():

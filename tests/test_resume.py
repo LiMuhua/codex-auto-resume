@@ -50,6 +50,24 @@ class SourceLaunchTests(unittest.TestCase):
         command, _, _ = watch_process_spec(args, None)
         self.assertNotIn('--lock-fd', command)
 
+    def test_macos_resolves_new_bundled_cli_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / 'ChatGPT.app'
+            cli = app / 'Contents/Resources/codex-cli/bin/codex'
+            cli.parent.mkdir(parents=True)
+            cli.touch()
+            self.assertEqual(codex_binary(app), cli)
+
+    def test_macos_preserves_legacy_cli_and_prefers_new_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / 'ChatGPT.app'
+            legacy = app / 'Contents/Resources/codex'
+            legacy.parent.mkdir(parents=True); legacy.touch()
+            self.assertEqual(codex_binary(app, 'macos'), legacy)
+            current = legacy.parent / 'codex-cli/bin/codex'
+            current.parent.mkdir(parents=True); current.touch()
+            self.assertEqual(codex_binary(app, 'macos'), current)
+
 
 def state(status='failed', error='usageLimitExceeded', turn_id='t1'):
     turn = {'turnId': turn_id, 'status': status, 'error': {'codexErrorInfo': error}, 'items': []}
@@ -667,6 +685,28 @@ class TransportTests(unittest.TestCase):
             binary=Path(directory)/'codex.exe'; binary.touch()
             with self.assertRaises(AppError): check_version(binary, 'windows')
 
+    def test_optional_ephemeral_normalization_is_limited_to_verified_build(self):
+        versions = [None,
+            {'platform':'macos', 'version':'26.820.60940', 'build':'7119'},
+            {'platform':'macos', 'version':'26.1002.52244', 'build':'13536'}]
+        for info in versions:
+            for value in ('missing', False, True, None):
+                with self.subTest(info=info, ephemeral=value):
+                    raw = state()
+                    if value == 'missing':
+                        del raw['ephemeral']
+                    else:
+                        raw['ephemeral'] = value
+                    app = Desktop('/unused'); app.app_info = info
+                    def receive(_deadline):
+                        app.snapshot_value = raw
+                    with patch.object(app, 'request', return_value={'handledByClientId':'owner'}), \
+                            patch.object(app, 'follow'), patch.object(app, '_read', side_effect=receive):
+                        snapshot = app.snapshot(THREAD)
+                    expected = value is False or (value == 'missing' and info == versions[-1])
+                    self.assertEqual(decide(snapshot).action == 'resume', expected)
+                    self.assertEqual('ephemeral' in raw, value != 'missing')
+
     @patch('codex_resume.app.check_version')
     def test_resume_observes_already_queued_ipc_events_before_dispatch(self, check):
         import socket
@@ -835,6 +875,97 @@ class StartupTests(unittest.TestCase):
                     ledger.close()
 
 
+@unittest.skipUnless(os.sys.platform == 'darwin', 'macOS compatibility')
+class MacCompatibilityTests(unittest.TestCase):
+    def write_app_info(self, root, version='26.1002.52244', build='13536', bundle='com.openai.codex'):
+        import plistlib
+        app = root / 'ChatGPT.app'
+        contents = app / 'Contents'; contents.mkdir(parents=True, exist_ok=True)
+        (contents / 'Info.plist').write_bytes(plistlib.dumps({
+            'CFBundleIdentifier':bundle, 'CFBundleShortVersionString':version, 'CFBundleVersion':build}))
+        return app
+
+    def test_macos_rejects_changed_build_and_wrong_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for build, bundle in [('13537', 'com.openai.codex'), ('13536', 'com.openai.chat')]:
+                with self.subTest(build=build, bundle=bundle):
+                    app = self.write_app_info(Path(directory), build=build, bundle=bundle)
+                    with self.assertRaises(AppError):
+                        check_version(app, 'macos')
+
+    def test_macos_unix_socket_full_resume_exchange_with_simulated_app(self):
+        """Real Unix socket, simulated App only; never contacts a user task."""
+        import socket
+        import threading
+        with tempfile.TemporaryDirectory(dir='/tmp') as directory:
+            root = Path(directory)
+            app_path = self.write_app_info(root)
+            ipc = root / 'ipc'; ipc.mkdir(mode=0o700)
+            endpoint = ipc / 'ipc.sock'
+            messages, errors = [], []
+            raw = state(); del raw['ephemeral']
+            raw['threadRuntimeStatus'] = {'type':'systemError'}
+            def exact(conn, size):
+                data = b''
+                while len(data) < size:
+                    chunk = conn.recv(size - len(data))
+                    if not chunk:
+                        raise EOFError('simulated socket closed')
+                    data += chunk
+                return data
+            def serve(listener):
+                try:
+                    conn, _ = listener.accept()
+                    with conn:
+                        conn.settimeout(5)
+                        def send(message):
+                            data = json.dumps(message).encode()
+                            conn.sendall(struct.pack('<I', len(data)) + data)
+                        while True:
+                            msg = json.loads(exact(conn, struct.unpack('<I', exact(conn, 4))[0]))
+                            messages.append(msg)
+                            method = msg['method']
+                            if msg['type'] == 'broadcast':
+                                if msg['params']['following']:
+                                    send({'type':'broadcast', 'sourceClientId':'owner',
+                                        'method':'thread-stream-state-changed', 'version':11,
+                                        'params':{'hostId':'local', 'conversationId':THREAD,
+                                            'change':{'type':'snapshot', 'revision':1, 'conversationState':raw}}})
+                                continue
+                            result = ({'clientId':'test-client'} if method == 'initialize' else
+                                      {'result':{'turn':{'id':'simulated-new-turn'}}} if method == 'thread-follower-start-turn' else {})
+                            send({'type':'response', 'requestId':msg['requestId'], 'method':method,
+                                  'resultType':'success', 'result':result, 'handledByClientId':'owner'})
+                            if method == 'thread-follower-start-turn':
+                                return
+                except Exception as exc:
+                    errors.append(exc)
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                listener.bind(str(endpoint)); endpoint.chmod(0o600)
+                listener.listen(1); listener.settimeout(5)
+                worker = threading.Thread(target=serve, args=(listener,), daemon=True)
+                worker.start()
+                try:
+                    with Desktop(root, app_path, timeout=3, system='macos') as app:
+                        current = app.snapshot(THREAD)
+                        self.assertEqual(decide(current).action, 'resume')
+                        self.assertEqual(app.resume(THREAD, fingerprint(current), 'simulated-message'),
+                                         'simulated-new-turn')
+                finally:
+                    worker.join(6)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+            requests = [m for m in messages if m['type'] == 'request']
+            self.assertEqual([(m['method'], m['version']) for m in requests], [
+                ('initialize', 0), ('thread-owner-discovery', 1),
+                ('thread-owner-discovery', 1), ('thread-follower-start-turn', 2)])
+            sent = requests[-1]
+            self.assertEqual(sent['targetClientId'], 'owner')
+            self.assertEqual(sent['params']['conversationId'], THREAD)
+            self.assertEqual(set(sent['params']['turnStart']['request']),
+                             {'threadId', 'clientUserMessageId', 'input'})
+
+
 class IntegrationTests(unittest.TestCase):
     @unittest.skipIf(os.name == 'nt', 'POSIX inherited descriptor test')
     def test_inherited_lock_survives_parent_close_and_is_not_reinherited(self):
@@ -926,6 +1057,16 @@ for line in sys.stdin:
             (contents/'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':'com.openai.codex',
                 'CFBundleVersion':'future', 'CFBundleShortVersionString':'next'}))
             with self.assertRaises(AppError): check_version(directory)
+
+    def test_current_macos_version_is_explicitly_supported(self):
+        import plistlib
+        from codex_resume.app import check_version
+        with tempfile.TemporaryDirectory() as directory:
+            contents=Path(directory)/'Contents'; contents.mkdir()
+            (contents/'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':'com.openai.codex',
+                'CFBundleVersion':'13536', 'CFBundleShortVersionString':'26.1002.52244'}))
+            self.assertEqual(check_version(directory), {'platform':'macos',
+                'version':'26.1002.52244', 'build':'13536'})
 
     @unittest.skipIf(os.name == 'nt', 'POSIX ownership and mode test')
     def test_private_directory_rejects_shared_permissions(self):
