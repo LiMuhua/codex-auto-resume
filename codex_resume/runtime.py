@@ -26,13 +26,39 @@ def hidden_window_kwargs():
     return {}
 
 
+def windows_bundled_codex(directory):
+    """Find codex.exe in a bin directory or its hash-named release folders.
+
+    The Store/MSIX app relocates the CLI outside the protected WindowsApps
+    directory and puts each release under its own hash, for example
+    %LOCALAPPDATA%\\OpenAI\\Codex\\bin\\6257d9e8f63c0f2b\\codex.exe.
+    """
+    directory = Path(directory)
+    direct = directory / 'codex.exe'
+    if direct.is_file():
+        return direct
+    try:
+        candidates = [child / 'codex.exe' for child in directory.iterdir() if child.is_dir()]
+    except OSError:
+        return None
+    newest = None
+    newest_time = -1
+    for candidate in candidates:
+        try:
+            modified = candidate.stat().st_mtime_ns
+        except OSError:
+            continue
+        if candidate.is_file() and modified > newest_time:
+            newest, newest_time = candidate, modified
+    return newest
+
+
 def default_app_path(system=None):
     system = system or platform_name()
     if system == 'windows':
         local = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local'))
-        # The Store/MSIX app relocates its bundled CLI here so it remains
-        # executable outside the protected WindowsApps directory.
-        return local / 'OpenAI' / 'Codex' / 'bin' / 'codex.exe'
+        bin_dir = local / 'OpenAI' / 'Codex' / 'bin'
+        return windows_bundled_codex(bin_dir) or bin_dir / 'codex.exe'
     return Path('/Applications/ChatGPT.app')
 
 
@@ -49,6 +75,10 @@ def codex_binary(app_path, system=None):
         else:
             candidates.extend((path / 'codex.exe', path / 'resources' / 'codex.exe',
                                path / 'OpenAI' / 'Codex' / 'bin' / 'codex.exe'))
+            for directory in (path, path / 'bin', path / 'OpenAI' / 'Codex' / 'bin'):
+                discovered = windows_bundled_codex(directory)
+                if discovered is not None:
+                    candidates.append(discovered)
         return next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
     resources = path / 'Contents' / 'Resources'
     # Newer macOS builds package the CLI as a versioned app resource bundle.

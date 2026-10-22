@@ -46,6 +46,35 @@ class SourceLaunchTests(unittest.TestCase):
                          'C:/Users/test/AppData/Local/OpenAI/Codex/bin/codex.exe')
         self.assertEqual(codex_binary(path, 'windows'), path)
 
+    def test_windows_detects_the_store_hash_release_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory) / 'OpenAI' / 'Codex' / 'bin'
+            older, newer = bin_dir / 'aaaa' / 'codex.exe', bin_dir / 'bbbb' / 'codex.exe'
+            older.parent.mkdir(parents=True); newer.parent.mkdir(parents=True)
+            older.touch(); newer.touch()
+            os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(newer, ns=(2_000_000_000, 2_000_000_000))
+            with patch.dict(os.environ, {'LOCALAPPDATA': directory}):
+                self.assertEqual(default_app_path('windows'), newer)
+
+    def test_windows_direct_bin_cli_takes_precedence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory) / 'OpenAI' / 'Codex' / 'bin'
+            direct, hashed = bin_dir / 'codex.exe', bin_dir / 'hash' / 'codex.exe'
+            direct.parent.mkdir(parents=True); hashed.parent.mkdir(parents=True)
+            direct.touch(); hashed.touch()
+            with patch.dict(os.environ, {'LOCALAPPDATA': directory}):
+                self.assertEqual(default_app_path('windows'), direct)
+
+    def test_windows_binary_directory_discovers_the_hashed_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codex_root = Path(directory) / 'OpenAI' / 'Codex'
+            bin_dir = codex_root / 'bin'
+            cli = bin_dir / 'hash' / 'codex.exe'
+            cli.parent.mkdir(parents=True); cli.touch()
+            self.assertEqual(codex_binary(bin_dir, 'windows'), cli)
+            self.assertEqual(codex_binary(codex_root, 'windows'), cli)
+
     def test_windows_watcher_does_not_receive_posix_descriptor(self):
         args = self.args()
         command, _, _ = watch_process_spec(args, None)
