@@ -56,8 +56,29 @@ def parser():
     return p
 
 
+def write_utf8(stream, text):
+    """Write UTF-8 regardless of the Windows console's ANSI code page.
+
+    Conversation titles can contain characters such as U+00A0 that GBK cannot
+    encode. Console and piped writers both accept UTF-8 bytes: Python writes
+    console bytes through WriteConsoleW, and JSON consumers expect UTF-8.
+    """
+    buffer = getattr(stream, 'buffer', None)
+    if buffer is None:
+        stream.write(text)
+        stream.flush()
+        return
+    stream.flush()
+    buffer.write(text.encode('utf-8'))
+    buffer.flush()
+
+
 def output(value):
-    print(json.dumps(value, ensure_ascii=False, indent=2), flush=True)
+    write_utf8(sys.stdout, json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+
+
+def emit_error(message):
+    write_utf8(sys.stderr, str(message) + '\n')
 
 
 def watch_process_spec(args, lock_fd=None):
@@ -69,7 +90,12 @@ def watch_process_spec(args, lock_fd=None):
         cmd += ['--lock-fd', str(lock_fd)]
     if args.limit_id:
         cmd += ['--limit-id', args.limit_id]
-    return cmd, Path(__file__).resolve().parent.parent, None
+    # Titles and reasons can include characters outside the ANSI code page.
+    # Keep the watcher's JSON log UTF-8 even when started from a GBK console.
+    env = os.environ.copy()
+    env['PYTHONIOENCODING'] = 'utf-8'
+    env['PYTHONUTF8'] = '1'
+    return cmd, Path(__file__).resolve().parent.parent, env
 
 
 def notify_user(thread_id, status, reason):
@@ -252,15 +278,15 @@ def cli():
     try:
         main()
     except KeyboardInterrupt:
-        print('操作已中止', file=sys.stderr)
+        emit_error('操作已中止')
         sys.exit(130)
     except Exception as exc:
         # Known local errors contain no session content. Other exceptions stay generic.
         from .app import AppError
         if isinstance(exc, (AppError, RuntimeError, ValueError)):
-            print(str(exc), file=sys.stderr)
+            emit_error(exc)
         else:
-            print('操作失败；请检查 App、目录权限和网络，未自动重试发送。', file=sys.stderr)
+            emit_error('操作失败；请检查 App、目录权限和网络，未自动重试发送。')
         sys.exit(1)
 
 

@@ -1,5 +1,6 @@
 """Small authenticated companion UI. No shell commands or App RPC exposed over HTTP."""
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import secrets
@@ -10,6 +11,8 @@ import threading
 import time
 from urllib.parse import urlsplit, parse_qs
 import uuid
+
+from .runtime import hidden_window_kwargs
 
 STATIC = Path(__file__).with_name('static')
 ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
@@ -45,9 +48,16 @@ class Backend:
     def command(self, *parts):
         cmd = [sys.executable, '-m', 'codex_resume', '--home', str(self.args.home),
                '--app', str(self.args.app), '--state-dir', str(self.args.state_dir), *parts]
+        # Do not inherit the ANSI code page (GBK on this locale): conversation
+        # titles may contain characters such as U+00A0 that GBK cannot encode.
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
+        env['PYTHONUTF8'] = '1'
         try:
             result = subprocess.run(cmd, cwd=Path(__file__).resolve().parent.parent,
-                                    capture_output=True, text=True, timeout=65)
+                                    capture_output=True, text=True, encoding='utf-8',
+                                    errors='replace', timeout=65, env=env,
+                                    **hidden_window_kwargs())
         except subprocess.TimeoutExpired:
             # start may already have spawned a watcher. Never retry a mutation here.
             raise APIError('操作超时，结果未确认。请刷新监控记录；不要重复点击开启。', 504)

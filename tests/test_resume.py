@@ -36,7 +36,8 @@ class SourceLaunchTests(unittest.TestCase):
         command, cwd, env = watch_process_spec(args, 7)
         self.assertEqual(command[:3], ['/usr/bin/python3', '-m', 'codex_resume'])
         self.assertEqual(command[-2:], ['--limit-id', 'codex'])
-        self.assertIsNone(env)
+        self.assertEqual(env['PYTHONIOENCODING'], 'utf-8')
+        self.assertEqual(env['PYTHONUTF8'], '1')
         self.assertEqual(cwd.name, 'codex-auto-resume')
 
     @patch.dict(os.environ, {'LOCALAPPDATA': r'C:\Users\test\AppData\Local'})

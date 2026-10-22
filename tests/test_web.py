@@ -1,7 +1,10 @@
 """HTTP boundary tests use a fake backend, never a real account or business task."""
 import http.client
 import json
+import os
 import socket
+import subprocess
+import sys
 import time
 from pathlib import Path
 import threading
@@ -10,6 +13,8 @@ import unittest
 from unittest.mock import patch
 
 from codex_resume.web import APIError, Backend, CompanionServer, serve
+
+ROOT = Path(__file__).resolve().parent.parent
 
 THREAD = '11111111-1111-4111-8111-111111111111'
 
@@ -154,6 +159,15 @@ class BackendTests(unittest.TestCase):
                 patch('codex_resume.web.subprocess.run',return_value=done) as run:
             self.assertEqual(self.backend.watches(),[])
             self.assertTrue(run.call_args.kwargs['creationflags'] & 0x08000000)
+    def test_command_forces_utf8_so_gbk_titles_do_not_fail(self):
+        done=SimpleNamespace(returncode=0,stdout=json.dumps({'title':'a\u00a0b'},ensure_ascii=False),stderr='')
+        with patch('codex_resume.web.subprocess.run',return_value=done) as run:
+            self.assertEqual(self.backend.watches(),{'title':'a\u00a0b'})
+        kwargs=run.call_args.kwargs
+        self.assertEqual(kwargs['encoding'],'utf-8')
+        self.assertEqual(kwargs['errors'],'replace')
+        self.assertEqual(kwargs['env']['PYTHONIOENCODING'],'utf-8')
+        self.assertEqual(kwargs['env']['PYTHONUTF8'],'1')
     def test_serve_always_binds_loopback(self):
         args=SimpleNamespace(port=0,home=Path('/tmp/home'),app=Path('/tmp/app'),state_dir=Path('/tmp/state'))
         with patch('codex_resume.web.CompanionServer') as companion:
@@ -201,5 +215,20 @@ class ServerLimitTests(unittest.TestCase):
             else:self.fail('worker slot leaked after request completion')
         finally:
             release.set();first.close();server.shutdown();server.server_close();worker.join()
+
+class CliOutputEncodingTests(unittest.TestCase):
+    def run_code(self, body, encoding='gbk'):
+        env=os.environ.copy();env['PYTHONIOENCODING']=encoding;env.pop('PYTHONUTF8',None)
+        return subprocess.run([sys.executable,'-c',body],cwd=ROOT,env=env,
+                              capture_output=True,timeout=60)
+    def test_json_output_and_errors_are_utf8_when_stream_encoding_is_gbk(self):
+        value='a'+chr(0xa0)+'b'
+        code=("from codex_resume.__main__ import output, emit_error; "
+              "output({'title': 'a"+chr(92)+"u00a0b'}); "
+              "emit_error('bad a"+chr(92)+"u00a0b')")
+        result=self.run_code(code)
+        self.assertEqual(result.returncode,0,result.stderr.decode('utf-8','replace'))
+        self.assertEqual(json.loads(result.stdout.decode('utf-8')),{'title':value})
+        self.assertEqual(result.stderr.decode('utf-8'),'bad '+value+'\n')
 
 if __name__=='__main__': unittest.main()
