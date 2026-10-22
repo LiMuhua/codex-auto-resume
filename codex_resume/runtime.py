@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from typing import Any
 
 
 WINDOWS_PIPE = r'\\.\pipe\codex-ipc'
@@ -14,7 +15,7 @@ def platform_name():
     return 'windows' if sys.platform == 'win32' else 'macos' if sys.platform == 'darwin' else sys.platform
 
 
-def hidden_window_kwargs():
+def hidden_window_kwargs() -> dict[str, Any]:
     """Keep console children of the detached watch process invisible.
 
     The watch process runs with DETACHED_PROCESS, so it has no console. Any

@@ -9,6 +9,7 @@ import stat
 import struct
 import subprocess
 import time
+from typing import Any, cast
 import uuid
 
 from .policy import decide, fingerprint
@@ -102,7 +103,7 @@ def open_selected_thread(app_path, thread_id, system=None):
 
 class WindowsPipe:
     """Small stdlib-only byte-stream client for the App's Windows named pipe."""
-    def __init__(self, endpoint=WINDOWS_PIPE, timeout=12, api=None):
+    def __init__(self, endpoint=WINDOWS_PIPE, timeout=12, api: Any = None):
         if api is None:
             import _winapi
             api = _winapi
@@ -123,6 +124,11 @@ class WindowsPipe:
     def settimeout(self, value):
         self.timeout = value
 
+    def _handle(self) -> int:
+        if self.handle is None:
+            raise ConnectionUnavailable('Windows Codex App 管道尚未连接')
+        return self.handle
+
     def _complete(self, operation, error):
         if error == self.api.ERROR_IO_PENDING:
             result = self.api.WaitForMultipleObjects([operation.event], False,
@@ -140,16 +146,18 @@ class WindowsPipe:
 
     def sendall(self, data):
         view = memoryview(data)
+        handle = self._handle()
         while view:
-            operation, error = self.api.WriteFile(self.handle, view, overlapped=True)
+            operation, error = self.api.WriteFile(handle, view, overlapped=True)
             count = self._complete(operation, error)
             if count <= 0:
                 raise ConnectionUnavailable('Windows Codex App 管道已断开')
             view = view[count:]
 
     def recv(self, size):
+        handle = self._handle()
         try:
-            operation, error = self.api.ReadFile(self.handle, size, overlapped=True)
+            operation, error = self.api.ReadFile(handle, size, overlapped=True)
             count = self._complete(operation, error)
             return bytes(operation.getbuffer()[:count])
         except OSError as exc:
@@ -158,8 +166,10 @@ class WindowsPipe:
             raise
 
     def has_data(self):
+        handle = self._handle()
         try:
-            return self.api.PeekNamedPipe(self.handle)[0] > 0
+            peeked = self.api.PeekNamedPipe(handle)[0]
+            return (peeked if isinstance(peeked, int) else len(peeked)) > 0
         except OSError as exc:
             raise ConnectionUnavailable('Windows Codex App 管道已断开') from exc
 
@@ -200,9 +210,10 @@ class Desktop:
             directory, endpoint = path.parent.lstat(), path.lstat()
             if not stat.S_ISDIR(directory.st_mode) or not stat.S_ISSOCK(endpoint.st_mode):
                 raise AppError('IPC 路径不是普通目录中的 socket')
-            if any(s.st_uid != os.getuid() or s.st_mode & 0o077 for s in (directory, endpoint)):
+            getuid = getattr(os, 'getuid')
+            if any(s.st_uid != getuid() or s.st_mode & 0o077 for s in (directory, endpoint)):
                 raise AppError('IPC 权限或所有者不安全；不会自动修改权限')
-            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock = socket.socket(getattr(socket, 'AF_UNIX'), socket.SOCK_STREAM)
             self.sock.settimeout(self.timeout)
             self.sock.connect(str(path))
             result = self.request('initialize', {'clientType': 'codex-auto-resume'}, 0)
@@ -217,23 +228,28 @@ class Desktop:
             self.sock.close()
             self.sock = None
 
-    def __exit__(self, *args):
+    def __exit__(self, *_):
         self.close()
 
     def _send(self, msg):
         data = json.dumps(msg, ensure_ascii=False).encode()
         if not 0 < len(data) <= MAX_FRAME:
             raise AppError('IPC 消息过大')
+        if self.sock is None:
+            raise ConnectionUnavailable('App 连接尚未建立')
         self.sock.sendall(struct.pack('<I', len(data)) + data)
 
     def _exact(self, n, deadline):
+        sock = self.sock
+        if sock is None:
+            raise ConnectionUnavailable('App 连接尚未建立')
         chunks, remaining = [], n
         while remaining:
             timeout = deadline - time.monotonic()
             if timeout <= 0:
                 raise TimeoutError('App 响应超时')
-            self.sock.settimeout(timeout)
-            chunk = self.sock.recv(remaining)
+            sock.settimeout(timeout)
+            chunk = sock.recv(remaining)
             if not chunk:
                 raise ConnectionUnavailable('App 连接已断开')
             chunks.append(chunk)
@@ -330,15 +346,21 @@ class Desktop:
         between the App's state check and its start-turn operation. A busy or
         partial stream fails closed rather than allowing an unbounded drain.
         """
+        sock = self.sock
+        if sock is None:
+            raise ConnectionUnavailable('App 连接尚未建立')
         deadline = time.monotonic() + self.timeout
         for _ in range(128):
-            pending = self.sock.has_data() if hasattr(self.sock, 'has_data') else bool(select.select([self.sock], [], [], 0)[0])
+            has_data = getattr(sock, 'has_data', None)
+            pending = (bool(has_data()) if has_data
+                       else bool(select.select([cast(socket.socket, sock)], [], [], 0)[0]))
             if not pending:
                 return
             self._read(deadline)
         raise AppError('App 状态仍在变化；取消本次续跑')
 
-    def resume(self, thread_id, expected_fingerprint, message_id, dispatch_guard=None):
+    def resume(self, thread_id, expected_fingerprint, message_id, dispatch_guard=None, continuation=None):
+        text = normalize_continuation(DEFAULT_CONTINUATION if continuation is None else continuation)
         check_version(self.app_path, self.system)  # Stop if the app updated while we were waiting.
         state = self.snapshot(thread_id)
         if decide(state).action != 'resume' or fingerprint(state) != expected_fingerprint:
