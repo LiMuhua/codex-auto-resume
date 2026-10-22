@@ -74,6 +74,25 @@ class Backend:
     def watches(self):
         return self.command('status')
 
+    def stop_all(self):
+        """Cancel every enrolled watcher after any in-flight start settles."""
+        with self.mutation_lock:
+            rows = self.command('status')
+            if not isinstance(rows, list):
+                raise APIError('监控记录格式无法识别；未停止监控。', 502)
+            stopped = []
+            for row in rows:
+                if not isinstance(row, dict) or not row.get('enabled'):
+                    continue
+                target = thread_id(row.get('thread_id'))
+                try:
+                    self.command('stop', target)
+                except APIError as exc:
+                    raise APIError(f'已停止 {len(stopped)} 个监控，其余停止失败：{exc}。'
+                                   '请刷新记录后重试。', exc.status)
+                stopped.append(target)
+            return {'stopped': stopped, 'note': '只取消未来自动续跑；App 中正在执行的任务不会被打断'}
+
     def threads(self):
         rows = self.command('list')
         return [{'id': row['id'], 'title': row.get('name') or (row.get('preview') or '未命名任务')[:120],
@@ -234,23 +253,41 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self.send(500, {'error': '本机服务暂时不可用，请检查服务终端。'})
 
+    def read_json(self):
+        if self.headers.get_content_type() != 'application/json':
+            raise APIError('只接受 JSON 请求。', 415)
+        lengths = self.headers.get_all('Content-Length') or []
+        if len(lengths) != 1 or not lengths[0].isdigit() or self.headers.get('Transfer-Encoding'):
+            raise APIError('请求长度不正确。')
+        length = int(lengths[0])
+        if not 0 < length <= 2048:
+            raise APIError('请求体过大或为空。', 413)
+        try:
+            return json.loads(self.rfile.read(length))
+        except (ValueError, UnicodeError):
+            raise APIError('请求不是有效 JSON。')
+
     def do_POST(self):
         try:
             self.guard(api=True)
+            if self.path == '/api/shutdown':
+                data = self.read_json()
+                if not isinstance(data, dict) or set(data) - {'stopWatches'}:
+                    raise APIError('请求包含不支持的字段。')
+                stop_watches = data.get('stopWatches', False)
+                if not isinstance(stop_watches, bool):
+                    raise APIError('停止监控选项必须为布尔值。')
+                result = {'stopped': True}
+                if stop_watches:
+                    # Watchers are independent processes. Only stop the ones the
+                    # user explicitly enrolled, after any in-flight start settles.
+                    result['watches'] = self.server.backend.stop_all()
+                self.send(200, result)
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
             if self.path not in ('/api/start', '/api/stop'):
                 raise APIError('不支持的操作。', 404)
-            if self.headers.get_content_type() != 'application/json':
-                raise APIError('只接受 JSON 请求。', 415)
-            lengths = self.headers.get_all('Content-Length') or []
-            if len(lengths) != 1 or not lengths[0].isdigit() or self.headers.get('Transfer-Encoding'):
-                raise APIError('请求长度不正确。')
-            length = int(lengths[0])
-            if not 0 < length <= 2048:
-                raise APIError('请求体过大或为空。', 413)
-            try:
-                data = json.loads(self.rfile.read(length))
-            except (ValueError, UnicodeError):
-                raise APIError('请求不是有效 JSON。')
+            data = self.read_json()
             self.send(200, self.server.backend.mutate(self.path.rsplit('/', 1)[1], data))
         except APIError as exc:
             self.send(exc.status, {'error': str(exc)})

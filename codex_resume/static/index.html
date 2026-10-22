@@ -20,7 +20,7 @@
     <div class="side-bottom"><span class="pill">本地源码版</span><p>工作留在 Codex App。<br>续航只负责等待与继续。</p><small id="version">App 版本待检查</small></div>
   </aside>
   <main id="main">
-    <header class="topbar"><span>本机工作站 <span class="slash">/</span> 续跑管理</span><span class="connection-state" id="connection-state">尚未连接</span></header>
+    <header class="topbar"><span>本机工作站 <span class="slash">/</span> 续跑管理</span><div class="top-actions"><span class="connection-state" id="connection-state">尚未连接</span><button id="stop-service" class="text-button" type="button" hidden>停止服务</button></div></header>
     <section id="overview" class="overview">
       <div class="page-heading"><div><p class="eyebrow">WORK CONTINUES</p><h1>把等待，交给续航。</h1><p class="subtitle">额度自然恢复后，在原任务里接着做。</p></div><button class="button secondary" id="refresh" disabled>刷新状态</button></div>
       <section id="login-panel" class="login-panel" aria-labelledby="login-heading">
@@ -69,4 +69,5 @@
   </div>
 </dialog>
 <dialog id="stop-dialog" aria-labelledby="stop-title"><div class="dialog-heading"><h2 id="stop-title">停止这个任务的监控？</h2></div><div class="dialog-content"><p id="stop-task" class="selected-title"></p><p>只取消后续自动续跑。已经发送的消息不会撤回，正在执行的 Codex 任务不会被打断。</p><div class="dialog-actions"><button id="cancel-stop" class="button secondary">保留监控</button><button id="confirm-stop" class="button danger">停止监控</button></div><p id="stop-error" class="error" role="alert"></p></div></dialog>
+<dialog id="shutdown-dialog" aria-labelledby="shutdown-title"><div class="dialog-heading"><h2 id="shutdown-title">停止本机控制台服务？</h2></div><div class="dialog-content"><p>会结束当前本机 Web 服务并释放连接凭据，之后需要重新运行启动脚本才能打开控制台。</p><label class="confirmation"><input id="shutdown-watches" type="checkbox"><span>同时停止所有已托管任务的后台监控进程</span></label><p class="field-help">监控进程是独立进程，不勾选时不会随控制台关闭。停止监控只取消未来续跑，不打断 App 中正在执行的任务。</p><div class="dialog-actions"><button id="cancel-shutdown" class="button secondary">保留服务</button><button id="confirm-shutdown" class="button danger">停止服务</button></div><p id="shutdown-error" class="error" role="alert"></p></div></dialog>
 </body></html>

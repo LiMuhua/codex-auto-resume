@@ -17,6 +17,8 @@ from codex_resume.web import APIError, Backend, CompanionServer, serve
 ROOT = Path(__file__).resolve().parent.parent
 
 THREAD = '11111111-1111-4111-8111-111111111111'
+THREAD2 = '22222222-2222-4222-8222-222222222222'
+THREAD3 = '33333333-3333-4333-8333-333333333333'
 
 
 class FakeBackend:
@@ -31,6 +33,9 @@ class FakeBackend:
     def mutate(self, action, data):
         self.calls.append((action, data))
         return {'ok': True}
+    def stop_all(self):
+        self.calls.append(('stop_all', {}))
+        return {'stopped': [THREAD]}
 
 
 class HTTPTests(unittest.TestCase):
@@ -101,6 +106,27 @@ class HTTPTests(unittest.TestCase):
         for path in ['/app.js','/style.css','/icon.svg']:
             code, _, body=self.request('GET',path,auth=False)
             self.assertEqual(code,200)
+    def test_shutdown_option_requires_a_boolean_and_reports_stopped_watches(self):
+        backend=FakeBackend()
+        server=CompanionServer(('127.0.0.1',0),backend,token='shutdown-credential')
+        worker=threading.Thread(target=server.serve_forever,daemon=True)
+        worker.start()
+        try:
+            def shutdown(body):
+                c=http.client.HTTPConnection(*server.server_address,timeout=3)
+                c.request('POST','/api/shutdown',body=json.dumps(body),
+                          headers={'X-Resume-Token':'shutdown-credential','Content-Type':'application/json'})
+                response=c.getresponse(); result=(response.status,json.loads(response.read())); c.close()
+                return result
+            self.assertEqual(shutdown({'stopWatches':'yes'})[0],400)
+            self.assertEqual(shutdown({'other':True})[0],400)
+            self.assertEqual(backend.calls,[])
+            self.assertEqual(shutdown({'stopWatches':True}),
+                             (200,{'stopped':True,'watches':{'stopped':[THREAD]}}))
+            self.assertEqual(backend.calls,[('stop_all',{})])
+            worker.join(3); self.assertFalse(worker.is_alive())
+        finally:
+            server.shutdown(); server.server_close()
 
 
 class BackendTests(unittest.TestCase):
@@ -141,6 +167,22 @@ class BackendTests(unittest.TestCase):
             self.assertFalse(worker.is_alive())
             self.assertTrue(done.is_set())
             command.assert_called_once_with('stop', THREAD)
+    def test_stop_all_cancels_only_enabled_watches_under_the_mutation_lock(self):
+        rows=[{'thread_id':THREAD,'enabled':1},{'thread_id':THREAD2,'enabled':0},
+              {'thread_id':THREAD3,'enabled':1}]
+        with patch.object(self.backend,'command',side_effect=[rows,{},{}]) as command:
+            self.assertEqual(self.backend.stop_all()['stopped'],[THREAD,THREAD3])
+        self.assertEqual([call.args for call in command.call_args_list],
+                         [('status',),('stop',THREAD),('stop',THREAD3)])
+        self.assertFalse(self.backend.mutation_lock.locked())
+    def test_stop_all_reports_partial_failure_without_claiming_success(self):
+        rows=[{'thread_id':THREAD,'enabled':1},{'thread_id':THREAD3,'enabled':1}]
+        with patch.object(self.backend,'command',
+                          side_effect=[rows,{},APIError('db busy',409)]):
+            with self.assertRaises(APIError) as caught:
+                self.backend.stop_all()
+        self.assertIn('已停止 1 个',str(caught.exception))
+        self.assertFalse(self.backend.mutation_lock.locked())
     def test_quota_cached_without_exposing_credits(self):
         raw={'app':{'version':'test'},'ipc':'connected','ready':True,'reason':'ok',
              'rateLimits':{'primary':{'usedPercent':10},'credits':{'balance':'secret'}}}
@@ -187,6 +229,26 @@ class BackendTests(unittest.TestCase):
             serve(args,token='fixed-credential',ready=lambda origin,token: ready.append((origin,token)))
         self.assertEqual(companion.call_args.kwargs['token'],'fixed-credential')
         self.assertEqual(ready,[('http://127.0.0.1:1234','fixed-credential')])
+    def test_shutdown_requires_credential_and_stops_serve_loop(self):
+        server=CompanionServer(('127.0.0.1',0),FakeBackend(),token='shutdown-credential')
+        worker=threading.Thread(target=server.serve_forever,daemon=True)
+        worker.start()
+        try:
+            for headers,expected in (({},401),({'X-Resume-Token':'shutdown-credential'},200)):
+                connection=http.client.HTTPConnection(*server.server_address,timeout=3)
+                try:
+                    connection.request('POST','/api/shutdown',body='{}',
+                                       headers={'Content-Type':'application/json',**headers})
+                    response=connection.getresponse()
+                    body=json.loads(response.read())
+                    self.assertEqual(response.status,expected)
+                    if expected==200: self.assertEqual(body,{'stopped':True})
+                finally:
+                    connection.close()
+            worker.join(3)
+            self.assertFalse(worker.is_alive())
+        finally:
+            server.shutdown();server.server_close()
 
 
 class ServerLimitTests(unittest.TestCase):

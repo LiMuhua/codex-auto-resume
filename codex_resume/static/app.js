@@ -108,6 +108,7 @@ function connectedUI(value) {
   $('refresh').disabled = !value;
   $('choose-task').disabled = !value;
   $('disconnect').hidden = !value;
+  $('stop-service').hidden = !value;
   renderMutation();
 }
 function forget() {
@@ -118,6 +119,8 @@ function forget() {
   quota = null; threads = []; checked = null; lastQuotaFetch = 0; assessments.clear();
   if ($('task-dialog').open) $('task-dialog').close();
   if ($('stop-dialog').open) $('stop-dialog').close();
+  if ($('shutdown-dialog').open) $('shutdown-dialog').close();
+  $('shutdown-watches').checked = false;
   $('watch-list').replaceChildren(node('p', 'empty-state', '已断开页面。后台监控不会因此停止；请重新连接后查看或停止。'));
   $('watch-updated').textContent = '监控状态未知';
   $('nav-count').textContent = '—'; $('task-count').textContent = '—';
@@ -358,7 +361,25 @@ async function stopTask() {
   catch(e) { if(generation===authGeneration){$('stop-error').textContent=e.message;notice('停止结果需检查。请刷新记录并人工核对；不会自动重试。',true);} }
   finally { busy($('confirm-stop'),false,'停止监控');renderMutation(); }
 }
-for (const dialog of [$('task-dialog'), $('stop-dialog')]) {
+async function shutdownService() {
+  const generation=authGeneration;
+  const stopWatches=$('shutdown-watches').checked===true;
+  busy($('confirm-shutdown'),true,'正在停止…'); $('shutdown-error').textContent='';
+  try {
+    const result=await api('shutdown',{stopWatches});
+    if(!result || result.stopped!==true
+       || (stopWatches && (!result.watches || !Array.isArray(result.watches.stopped))))
+      throw new Error('服务停止响应不匹配，请检查本机是否仍有后台进程。');
+    const stopped=stopWatches ? result.watches.stopped.length : 0;
+    $('shutdown-dialog').close(); forget();
+    notice(stopWatches
+      ? `本机控制台服务已停止，已取消 ${stopped} 个任务监控的后续续跑。App 中正在执行的任务不会被打断；可以关闭此页面。`
+      : '本机控制台服务已停止，可以关闭此页面。已启动的任务监控是独立进程；如需停止，请重新运行启动脚本后在任务列表中操作。');
+  } catch(e) {
+    if(generation===authGeneration){$('shutdown-error').textContent=e.message;notice('未能确认服务已停止，请检查本机后台进程。',true);}
+  } finally { busy($('confirm-shutdown'),false,'停止服务'); }
+}
+for (const dialog of [$('task-dialog'), $('stop-dialog'), $('shutdown-dialog')]) {
   dialog.addEventListener('keydown', event=>{
     if(event.key==='Escape') { event.preventDefault(); dialog.close(); }
   });
@@ -376,6 +397,9 @@ $('start-form').addEventListener('submit',startTask);
 $('cancel-stop').addEventListener('click',()=>$('stop-dialog').close());
 $('confirm-stop').addEventListener('click',stopTask);
 $('disconnect').addEventListener('click',()=>{forget();notice('页面已断开，后台监控不受影响。');});
+$('stop-service').addEventListener('click',()=>{$('shutdown-error').textContent='';$('shutdown-dialog').showModal();});
+$('cancel-shutdown').addEventListener('click',()=>$('shutdown-dialog').close());
+$('confirm-shutdown').addEventListener('click',shutdownService);
 setInterval(()=>refresh(),15000); setInterval(clocks,1000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden) refresh(true);});
 if(token) login();

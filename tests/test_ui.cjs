@@ -8,7 +8,7 @@ const path = require('node:path');
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
 class Element {
-  constructor() { this.children=[];this.listeners={};this.attrs={};this.dataset={};this.value='';this._text='';this.hidden=false;this.open=false; }
+  constructor() { this.children=[];this.listeners={};this.attrs={};this.dataset={};this.value='';this._text='';this.hidden=false;this.open=false;this.checked=false; }
   set textContent(value) { this._text=String(value);this.children=[]; }
   get textContent() { return this._text + this.children.map(c=>c.textContent).join(' '); }
   append(...children) { this.children.push(...children); }
@@ -26,15 +26,20 @@ class Element {
 function harness(shared = {}) {
   const elements=new Map(), pending=[];
   const storage=shared.storage || new Map();
+  const session=shared.session || new Map();
   const locks=shared.locks || {held:false};
+  const replaced=shared.replaced || [];
   const el=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  // login() looks its submit button up inside the form; keep the synthetic
+  // DOM shaped like index.html so token-fragment auto-login can run.
+  const loginButton=el('login-button');loginButton.className='utton';el('login-form').append(loginButton);
   const context=vm.createContext({
     document:{getElementById:el,createElement:()=>new Element(),addEventListener(){},hidden:false},
-    sessionStorage:{getItem(){return '';},setItem(){},removeItem(){}},
+    sessionStorage:{getItem(key){return session.has(key)?session.get(key):null;},setItem(key,value){session.set(key,String(value));},removeItem(key){session.delete(key);}},
     localStorage:{getItem(key){return storage.get(key)||null;},setItem(key,value){storage.set(key,value);},removeItem(key){storage.delete(key);}},
     navigator:{locks:{async request(name,options,callback){(locks.calls??=[]).push({name,options});if(locks.held)return callback(null);locks.held=true;try{return await callback({name});}finally{locks.held=false;}}}},
     window:{addEventListener(){}},
-    location:{hash:'',pathname:'/',protocol:'http:',host:'127.0.0.1:8765'},history:{replaceState(){}},
+    location:{hash:shared.hash||'',pathname:'/',protocol:'http:',host:'127.0.0.1:8765'},history:{replaceState(...args){replaced.push(args);}},
     URLSearchParams,console,setInterval(){},setTimeout(...args){const timer=setTimeout(...args);timer.unref();return timer;},clearTimeout,AbortController,
     fixture:[{id:A,title:'Task A'},{id:B,title:'Task B'}],
     fetch(url,options) { return new Promise((resolve,reject)=>pending.push({url,options,reject,reply(result,status=200){resolve({ok:status===200,status,json:async()=>result});}})); }
@@ -42,7 +47,7 @@ function harness(shared = {}) {
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../codex_resume/static/app.js'),'utf8'),context);
   const run=code=>vm.runInContext(code,context);
   run('threads=fixture; renderThreads();'); el('task-dialog').open=true;
-  return {el,pending,run,storage,locks,choose(id){el('thread-id').value=id;el('thread-id').emit('input');},result(id,decision='wait'){return {threadId:id,decision,title:id===A?'Task A':'Task B',reason:'test',model:'test-model',taskState:decision==='stop'?'idle':'running',canMonitor:decision!=='stop',source:'live'};}};
+  return {el,pending,run,storage,session,replaced,locks,choose(id){el('thread-id').value=id;el('thread-id').emit('input');},result(id,decision='wait'){return {threadId:id,decision,title:id===A?'Task A':'Task B',reason:'test',model:'test-model',taskState:decision==='stop'?'idle':'running',canMonitor:decision!=='stop',source:'live'};}};
 }
 
 test('click selects exactly one row and synchronizes the UUID and title',async()=>{
@@ -297,4 +302,110 @@ test('delayed unlock rechecks connection and withdrawn consent before removing i
     const request=h.run('acknowledgeMutation()');h.run(change+';releaseLock()');await request;
     assert.ok(h.run('pendingMutation()'));assert.equal(h.pending.length,0);
   }
+});
+
+test('token fragment connects automatically, keeps the token for the tab, and leaves the address',async()=>{
+  const h=harness({hash:'#token=secret-value'});
+  assert.equal(h.run('token'),'secret-value');
+  assert.equal(h.session.get('relay-token'),'secret-value');
+  assert.deepEqual(h.replaced,[[null,'','/']]);
+  assert.equal(h.pending.length,1);
+  assert.equal(h.pending[0].url,'/api/watches');
+  assert.equal(h.pending[0].options.headers['X-Resume-Token'],'secret-value');
+  h.pending[0].reply([]);await tick();
+  assert.equal(h.run('connected'),true);
+  assert.equal(h.el('stop-service').hidden,false);
+});
+
+test('a stored tab token connects without a fragment and does not rewrite the address',()=>{
+  const h=harness({session:new Map([['relay-token','tab-token']])});
+  assert.equal(h.replaced.length,0);
+  assert.equal(h.run('token'),'tab-token');
+  assert.equal(h.pending[0].options.headers['X-Resume-Token'],'tab-token');
+});
+
+test('stop service sends one authenticated shutdown and disconnects after confirmation',{timeout:2000},async()=>{
+  const h=harness();h.run("token='live';sessionStorage.setItem('relay-token','live');connectedUI(true)");
+  h.el('stop-service').emit('click');
+  assert.equal(h.el('shutdown-dialog').open,true);
+  const request=h.run('shutdownService()');
+  assert.equal(h.el('confirm-shutdown').disabled,true);
+  assert.match(h.el('confirm-shutdown').textContent,/正在停止/);
+  assert.equal(h.pending[0].url,'/api/shutdown');
+  assert.equal(h.pending[0].options.method,'POST');
+  assert.equal(h.pending[0].options.body,JSON.stringify({stopWatches:false}));
+  h.pending[0].reply({stopped:true});await request;
+  assert.equal(h.el('shutdown-dialog').open,false);
+  assert.equal(h.run('connected'),false);
+  assert.equal(h.el('stop-service').hidden,true);
+  assert.equal(h.session.has('relay-token'),false);
+  assert.match(h.el('notice').textContent,/控制台服务已停止/);
+  assert.equal(h.el('confirm-shutdown').disabled,false);
+});
+
+test('unconfirmed stop-service response keeps the connection and reports failure',{timeout:2000},async()=>{
+  for(const reply of [{},{stopped:false}]){
+    const h=harness();h.run("token='live';connectedUI(true)");
+    h.el('stop-service').emit('click');
+    const request=h.run('shutdownService()');
+    h.pending[0].reply(reply);await request;
+    assert.equal(h.run('connected'),true);
+    assert.equal(h.el('shutdown-dialog').open,true);
+    assert.match(h.el('shutdown-error').textContent,/不匹配/);
+    assert.doesNotMatch(h.el('notice').textContent,/控制台服务已停止/);
+    assert.equal(h.el('confirm-shutdown').disabled,false);
+  }
+});
+
+test('stop service can also cancel every enrolled watcher',{timeout:2000},async()=>{
+  const h=harness();h.run("token='live';sessionStorage.setItem('relay-token','live');connectedUI(true)");
+  h.el('stop-service').emit('click');
+  h.el('shutdown-watches').checked=true;
+  const request=h.run('shutdownService()');
+  assert.equal(h.pending[0].options.body,JSON.stringify({stopWatches:true}));
+  h.pending[0].reply({stopped:true,watches:{stopped:['a','b']}});await request;
+  assert.equal(h.run('connected'),false);
+  assert.equal(h.el('shutdown-watches').checked,false);
+  assert.match(h.el('notice').textContent,/已取消 2 个任务监控/);
+});
+
+test('a shutdown response without watcher results is not treated as success',{timeout:2000},async()=>{
+  const h=harness();h.run("token='live';connectedUI(true)");
+  h.el('stop-service').emit('click');
+  h.el('shutdown-watches').checked=true;
+  const request=h.run('shutdownService()');
+  h.pending[0].reply({stopped:true});await request;
+  assert.equal(h.run('connected'),true);
+  assert.equal(h.el('shutdown-dialog').open,true);
+  assert.match(h.el('shutdown-error').textContent,/不匹配/);
+  assert.equal(h.el('shutdown-watches').checked,true);
+});
+
+test('a stale shutdown success cannot disconnect a newer connection',{timeout:2000},async()=>{
+  const h=harness();h.run("token='old';connectedUI(true)");
+  const request=h.run('shutdownService()');
+  h.run("forget();token='new';login()");
+  h.pending[0].reply({stopped:true});await request;
+  h.pending[1].reply([]);await tick();
+  assert.equal(h.run('connected'),true);
+  assert.equal(h.el('shutdown-error').textContent,'');
+  assert.doesNotMatch(h.el('notice').textContent,/控制台服务已停止/);
+});
+
+test('a stale shutdown failure cannot show an error after disconnect',{timeout:2000},async()=>{
+  const h=harness();h.run("token='old';connectedUI(true)");
+  const request=h.run('shutdownService()');
+  h.run('forget()');
+  h.pending[0].reply({error:'bad'},500);await request;
+  assert.equal(h.el('shutdown-error').textContent,'');
+  assert.doesNotMatch(h.el('notice').textContent,/未能确认/);
+  assert.equal(h.el('confirm-shutdown').disabled,false);
+});
+
+test('disconnect hides the stop-service button and closes its dialog',()=>{
+  const h=harness();h.run('connectedUI(true)');
+  h.el('shutdown-dialog').open=true;
+  h.run('forget()');
+  assert.equal(h.el('stop-service').hidden,true);
+  assert.equal(h.el('shutdown-dialog').open,false);
 });
