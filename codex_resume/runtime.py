@@ -7,10 +7,23 @@ import sys
 
 
 WINDOWS_PIPE = r'\\.\pipe\codex-ipc'
+CREATE_NO_WINDOW = 0x08000000
 
 
 def platform_name():
     return 'windows' if sys.platform == 'win32' else 'macos' if sys.platform == 'darwin' else sys.platform
+
+
+def hidden_window_kwargs():
+    """Keep console children of the detached watch process invisible.
+
+    The watch process runs with DETACHED_PROCESS, so it has no console. Any
+    console-subsystem child (PowerShell, codex.exe, cmd.exe) it starts would
+    otherwise allocate a new visible console window every poll.
+    """
+    if platform_name() == 'windows':
+        return {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', CREATE_NO_WINDOW)}
+    return {}
 
 
 def default_app_path(system=None):
@@ -51,7 +64,8 @@ def windows_package_version():
     script = ("$p=Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | "
               "Select-Object -First 1; if ($null -eq $p) { exit 3 }; $p.Version.ToString()")
     result = subprocess.run([shell, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
-                            capture_output=True, text=True, timeout=10)
+                            capture_output=True, text=True, timeout=10,
+                            **hidden_window_kwargs())
     value = result.stdout.strip()
     if result.returncode or not value:
         raise RuntimeError('找不到当前用户安装的 Windows Codex App')

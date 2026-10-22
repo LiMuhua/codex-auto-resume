@@ -12,7 +12,8 @@ import time
 import uuid
 
 from .policy import decide, fingerprint
-from .runtime import WINDOWS_PIPE, codex_binary, platform_name, windows_package_version
+from .runtime import (WINDOWS_PIPE, codex_binary, hidden_window_kwargs, platform_name,
+                      windows_package_version)
 
 SUPPORTED_MAC_APPS = {
     ('26.820.60940', '7119'),
@@ -45,7 +46,8 @@ def check_version(app_path, system=None):
             raise AppError('找不到 Windows Codex App 的 codex.exe；请先启动一次 Codex App')
         try:
             result = subprocess.run([str(binary), '--version'], capture_output=True, text=True,
-                                    timeout=5, stdin=subprocess.DEVNULL)
+                                    timeout=5, stdin=subprocess.DEVNULL,
+                                    **hidden_window_kwargs())
             cli_version = result.stdout.strip().removeprefix('codex-cli ').strip()
             app_version = windows_package_version()
         except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
@@ -79,7 +81,8 @@ def open_selected_thread(app_path, thread_id, system=None):
                ['/usr/bin/open', '-g', '-a', str(app_path), 'codex://threads/' + target])
     subprocess.run(command,
                    check=True, timeout=5, stdin=subprocess.DEVNULL,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   **hidden_window_kwargs())
 
 
 class WindowsPipe:

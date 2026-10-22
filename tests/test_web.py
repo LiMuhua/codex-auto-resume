@@ -148,6 +148,12 @@ class BackendTests(unittest.TestCase):
         with patch('codex_resume.web.subprocess.run',side_effect=subprocess.TimeoutExpired('test',65)) as run:
             with self.assertRaises(APIError): self.backend.command('start',THREAD)
             self.assertEqual(run.call_count,1)
+    def test_commands_hide_console_windows_on_windows(self):
+        done=SimpleNamespace(returncode=0,stdout='[]',stderr='')
+        with patch('codex_resume.runtime.platform_name',return_value='windows'), \
+                patch('codex_resume.web.subprocess.run',return_value=done) as run:
+            self.assertEqual(self.backend.watches(),[])
+            self.assertTrue(run.call_args.kwargs['creationflags'] & 0x08000000)
     def test_serve_always_binds_loopback(self):
         args=SimpleNamespace(port=0,home=Path('/tmp/home'),app=Path('/tmp/app'),state_dir=Path('/tmp/state'))
         with patch('codex_resume.web.CompanionServer') as companion:

@@ -18,7 +18,8 @@ from codex_resume.policy import decide, fingerprint, quota_status, latest_turn
 from codex_resume.rpc import ReadOnlyServer
 from codex_resume.store import Store
 from codex_resume.tasks import list_conversations, stored_assessment, inspect_task
-from codex_resume.runtime import WINDOWS_PIPE, codex_binary, default_app_path
+from codex_resume.runtime import (WINDOWS_PIPE, codex_binary, default_app_path,
+                                  hidden_window_kwargs)
 
 THREAD = '11111111-1111-4111-8111-111111111111'
 
@@ -836,6 +837,35 @@ class TransportTests(unittest.TestCase):
         server=ReadOnlyServer('/unused','/unused')
         for method in ('turn/start','account/rateLimitResetCredit/consume','account/login/start'):
             with self.assertRaises(ValueError): server.query(method,{})
+
+
+class WindowSilenceTests(unittest.TestCase):
+    @patch('codex_resume.runtime.platform_name', return_value='windows')
+    def test_windows_children_are_spawned_without_console_windows(self, system):
+        self.assertEqual(hidden_window_kwargs()['creationflags'] & 0x08000000, 0x08000000)
+
+    @patch('codex_resume.runtime.platform_name', return_value='macos')
+    def test_posix_spawn_options_are_unchanged(self, system):
+        self.assertEqual(hidden_window_kwargs(), {})
+
+    @patch('codex_resume.runtime.platform_name', return_value='windows')
+    @patch('codex_resume.app.check_version')
+    @patch('codex_resume.app.subprocess.run')
+    def test_thread_navigation_hides_its_cmd_window(self, run, version, system):
+        open_selected_thread('C:/codex.exe', THREAD, system='windows')
+        self.assertTrue(run.call_args.kwargs['creationflags'] & 0x08000000)
+
+    @patch('codex_resume.runtime.platform_name', return_value='windows')
+    @patch('codex_resume.rpc.subprocess.Popen')
+    def test_read_only_query_server_hides_its_window(self, popen, system):
+        stream = SimpleNamespace(write=lambda _data: None, flush=lambda: None, close=lambda: None,
+                                 read1=lambda _size: b'')
+        popen.return_value = SimpleNamespace(stdin=stream, stdout=stream, terminate=lambda: None,
+                                             wait=lambda timeout=0: 0, kill=lambda: None)
+        with patch.object(ReadOnlyServer, '_request'), patch.object(ReadOnlyServer, '_send'):
+            with ReadOnlyServer('codex.exe', 'C:/home'):
+                pass
+        self.assertTrue(popen.call_args.kwargs['creationflags'] & 0x08000000)
 
 
 class StartupTests(unittest.TestCase):

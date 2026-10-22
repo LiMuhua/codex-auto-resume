@@ -8,7 +8,7 @@ import subprocess
 import threading
 import time
 
-from .runtime import platform_name
+from .runtime import hidden_window_kwargs, platform_name
 
 
 class ReadOnlyServer:
@@ -30,7 +30,8 @@ class ReadOnlyServer:
         # No shell, no API key handling, no login mutation and no model runs.
         self.process = subprocess.Popen([self.binary, 'app-server', '--stdio'], env=env,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL)
+                                        stderr=subprocess.DEVNULL,
+                                        **hidden_window_kwargs())
         if self.system == 'windows':
             self.chunks = queue.Queue()
             def read_stdout():
