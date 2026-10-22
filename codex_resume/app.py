@@ -22,8 +22,23 @@ SUPPORTED_MAC_APPS = {
 SUPPORTED_WINDOWS_APPS = {'26.901.31953.0', '26.901.31953'}
 SUPPORTED_WINDOWS_CLIS = {'0.153.1'}
 MAX_FRAME = 32 * 1024 * 1024
-CONTINUATION = ('额度恢复后，请继续本会话原有的未完成工作。先核对当前进度与工作区，'
-                '不要重复已完成步骤，不扩大范围，不绕过审批。若工作已经完成或需要用户决定，请明确说明并停止。')
+DEFAULT_CONTINUATION = ('额度恢复后，请继续本会话原有的未完成工作。先核对当前进度与工作区，'
+                        '不要重复已完成步骤，不扩大范围，不绕过审批。若工作已经完成或需要用户决定，请明确说明并停止。')
+MAX_CONTINUATION_LENGTH = 2000
+
+
+def normalize_continuation(value):
+    """Validate the single continuation message allowed for an enrolled task."""
+    if not isinstance(value, str):
+        raise ValueError('续跑内容必须为文本。')
+    text = value.replace('\r\n', '\n').replace('\r', '\n').strip()
+    if not text:
+        raise ValueError('续跑内容不能为空。')
+    if len(text) > MAX_CONTINUATION_LENGTH:
+        raise ValueError(f'续跑内容不能超过 {MAX_CONTINUATION_LENGTH} 个字符。')
+    if any((ord(char) < 32 and char not in '\n\t') or 0x7f <= ord(char) <= 0x9f for char in text):
+        raise ValueError('续跑内容不能包含控制字符。')
+    return text
 
 
 class AppError(RuntimeError):
@@ -333,7 +348,7 @@ class Desktop:
         if generation != self.state_generation:
             raise AppError('发送前已收到新的任务状态；取消本次续跑')
         request = {'threadId': thread_id, 'clientUserMessageId': message_id,
-                   'input': [{'type': 'text', 'text': CONTINUATION, 'text_elements': []}]}
+                   'input': [{'type': 'text', 'text': text, 'text_elements': []}]}
         if dispatch_guard is not None and not dispatch_guard():
             raise AppError('托管已停止或发送授权已改变；取消本次续跑')
         reply = self.request('thread-follower-start-turn',

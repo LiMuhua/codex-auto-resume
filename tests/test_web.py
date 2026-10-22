@@ -1,5 +1,6 @@
 """HTTP boundary tests use a fake backend, never a real account or business task."""
 import http.client
+from html.parser import HTMLParser
 import json
 import os
 import socket
@@ -12,7 +13,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from codex_resume.web import APIError, Backend, CompanionServer, serve
+from codex_resume.app import DEFAULT_CONTINUATION, MAX_CONTINUATION_LENGTH
+from codex_resume.web import APIError, Backend, CompanionServer, MAX_REQUEST_BODY, serve
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -65,6 +67,22 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.backend.calls, [])
         self.assertEqual(headers['Cache-Control'], 'no-store')
         self.assertIn("frame-ancestors 'none'", headers['Content-Security-Policy'])
+    def test_page_declares_the_safe_continuation_default(self):
+        class Fields(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.fields = {}
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == 'textarea' and attrs.get('id') in ('continuation', 'restart-continuation'):
+                    self.fields[attrs['id']] = attrs
+        fields = Fields()
+        fields.feed((ROOT / 'codex_resume/static/index.html').read_text(encoding='utf-8'))
+        start = fields.fields['continuation']
+        self.assertEqual(start['placeholder'], DEFAULT_CONTINUATION)
+        self.assertEqual(start['maxlength'], str(MAX_CONTINUATION_LENGTH))
+        self.assertIn('required', start)
+        self.assertEqual(fields.fields['restart-continuation']['maxlength'], str(MAX_CONTINUATION_LENGTH))
+        self.assertIn('required', fields.fields['restart-continuation'])
     def test_all_private_gets_require_authentication(self):
         for path in ['/api/watches','/api/threads','/api/quota','/api/check?threadId='+THREAD]:
             self.assertEqual(self.request('GET',path,auth=False)[0],401)
@@ -78,10 +96,16 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(self.request('POST','/api/start',json.dumps({'threadId':THREAD}),headers)[0],expected)
         self.assertEqual(self.backend.calls, [])
     def test_same_origin_json_post(self):
-        body={'threadId':THREAD,'confirmed':True,'maxResumes':1}
+        body={'threadId':THREAD,'confirmed':True,'maxResumes':1,'continuation':'继续完成原任务'}
         code, _, _ = self.request('POST','/api/start',json.dumps(body),{'Content-Type':'application/json','Origin':self.server.origin})
         self.assertEqual(code,200)
         self.assertEqual(self.backend.calls,[('start',body)])
+    def test_request_body_limit_allows_the_maximum_continuation(self):
+        body={'threadId':THREAD,'confirmed':True,'continuation':'续'*MAX_CONTINUATION_LENGTH}
+        encoded=json.dumps(body)
+        self.assertLessEqual(len(encoded.encode()),MAX_REQUEST_BODY)
+        code, _, _ = self.request('POST','/api/start',encoded,{'Content-Type':'application/json'})
+        self.assertEqual(code,200)
     def test_get_cannot_start_and_unknown_paths_do_not_escape_static_root(self):
         for path in ['/api/start','/../web.py','/%2e%2e/web.py','/app.js?secret=123']:
             self.assertEqual(self.request('GET',path)[0],404)
@@ -93,7 +117,7 @@ class HTTPTests(unittest.TestCase):
     def test_malformed_large_and_non_json_requests_rejected(self):
         for body, headers, expected in [('{}', {'Content-Type':'text/plain'},415),
                                         ('{', {'Content-Type':'application/json'},400),
-                                        ('x'*2049, {'Content-Type':'application/json'},413)]:
+                                        ('x'*(MAX_REQUEST_BODY+1), {'Content-Type':'application/json'},413)]:
             self.assertEqual(self.request('POST','/api/start',body,headers)[0],expected)
         self.assertEqual(self.backend.calls, [])
     def test_no_cors_or_reflected_private_error(self):
@@ -136,15 +160,24 @@ class BackendTests(unittest.TestCase):
         good={'threadId':THREAD,'confirmed':True,'maxResumes':1}
         cases=[{}, [], dict(good,confirmed=False),dict(good,threadId='; rm file'),
                dict(good,maxResumes=True),dict(good,maxResumes=0),dict(good,maxResumes=101),
-               dict(good,maxResumes='3'),dict(good,prompt='run anything'),dict(good,limitId='--arg')]
+               dict(good,maxResumes='3'),dict(good,prompt='run anything'),dict(good,limitId='--arg'),
+               dict(good,continuation=''),dict(good,continuation='   '),dict(good,continuation=None),
+               dict(good,continuation=123),dict(good,continuation='a\x00b'),
+               dict(good,continuation='续'*(MAX_CONTINUATION_LENGTH+1))]
         with patch.object(self.backend,'command') as command:
             for body in cases:
                 with self.subTest(body=body), self.assertRaises(APIError): self.backend.mutate('start',body)
             command.assert_not_called()
-    def test_start_calls_guarded_cli_and_does_not_expose_arbitrary_prompt(self):
+    def test_start_calls_guarded_cli_with_the_validated_continuation(self):
         with patch.object(self.backend,'command',return_value={'status':'starting'}) as command:
             self.backend.mutate('start',{'threadId':THREAD,'confirmed':True,'limitId':'codex'})
-            command.assert_called_once_with('start',THREAD,'--max-resumes','3','--limit-id','codex')
+            command.assert_called_once_with('start',THREAD,'--max-resumes','3',
+                '--continuation='+DEFAULT_CONTINUATION,'--limit-id','codex')
+        with patch.object(self.backend,'command',return_value={'status':'starting'}) as command:
+            self.backend.mutate('start',{'threadId':THREAD,'confirmed':True,
+                'continuation':'  自定义续跑' + chr(13) + chr(10) + '第二行  '})
+            command.assert_called_once_with('start',THREAD,'--max-resumes','3',
+                '--continuation=自定义续跑' + chr(10) + '第二行')
     def test_concurrent_start_refused_and_stop_runs_after_pending_start(self):
         self.backend.mutation_lock.acquire()
         entered = threading.Event()

@@ -189,8 +189,8 @@ Open the URL on the same computer and paste the credential into the page. Copy i
 2. Review the five-hour and weekly usage windows.
 3. Choose **托管长任务** and select one local Codex conversation.
 4. Let the read-only check confirm whether that exact task can be monitored.
-5. Review the cumulative resume budget—the default maximum is 3—and confirm enrollment.
-6. Use **停止监控** whenever you want to cancel future continuations. A stopped task keeps a **重新启动** button: one confirmation revalidates its live state and re-arms monitoring with the budget you choose, without repeating the task-selection flow.
+5. Review the continuation message and the cumulative resume budget. The page pre-fills the safe default continuation; you can edit that message for this task. The default maximum is 3.
+6. Confirm enrollment. Use **停止监控** whenever you want to cancel future continuations. A stopped task keeps a **重新启动** button: one confirmation revalidates its live state, re-opens the message and budget, and re-arms monitoring without repeating the task-selection flow.
 7. Use **停止服务** in the top-right corner to stop the local Web server process itself. Tick the option in that dialog to also cancel all enrolled watchers.
 
 Stopping monitoring does not interrupt work already running in Codex and cannot retract a message already accepted by the App. Closing the browser or the Web server also does not stop an already launched watcher. By default, **停止服务** stops only the dashboard process; tick the option in its dialog to cancel every enrolled watcher as well.
@@ -230,7 +230,13 @@ If the account reports more than one usage bucket, specify the intended bucket e
 ./start/start start <TASK_UUID> --limit-id codex
 ```
 
-The tool never guesses between multiple buckets.
+To use a task-specific continuation message instead of the built-in safe default:
+
+```bash
+./start/start start <TASK_UUID> --continuation "Check the current progress and continue without repeating completed steps."
+```
+
+The message is limited to 2000 characters. It is stored with the task and is only sent after a fresh live-state check; it cannot approve tools or answer input requests. The tool never guesses between multiple buckets.
 
 ## How it works
 
@@ -244,12 +250,12 @@ flowchart LR
     E --> F[Re-read quota and task]
     F -->|Still eligible and quota available| G[Persist send intent]
     F -->|State changed or quota unavailable| C
-    G --> H[Start one fixed continuation turn]
+    G --> H[Start one configured continuation turn]
     H -->|Confirmed new turn| C
     H -->|Delivery uncertain| X
 ```
 
-The continuation text is fixed in the source. The Web API cannot submit an arbitrary prompt, shell command, App RPC method, approval decision, or account mutation.
+Each enrolled task stores one continuation message. The dashboard pre-fills the safe default and lets you edit that message for the explicitly selected task; the CLI accepts it with `--continuation`. A send still requires a fresh live-state check, a persisted intent, and the existing budget/cancellation guards. The Web API cannot submit shell commands, App RPC methods, approval decisions, or account mutations, and the continuation text cannot approve tools or answer input requests.
 
 ## What triggers a continuation
 
@@ -275,11 +281,12 @@ The watcher stops or refuses enrollment when it sees, among other conditions:
 | App connection | Uses the installed App and its existing login. It does not read or export account tokens. |
 | Approvals | Never accepts or bypasses approval, permission, or user-input requests. |
 | Quota | Waits for natural reset data returned by the account. No reset credits or account switching. |
+| Continuation text | One bounded message per explicitly enrolled task. The page pre-fills the safe default; the text cannot approve tools or answer input requests. |
 | Dispatch | Re-validates immediately before sending and persists intent before the one allowed attempt. |
 | Uncertainty | If delivery cannot be confirmed, monitoring stops and automatic retry is forbidden. |
 | Deduplication | A process lock and persistent ledger prevent duplicate watchers and repeated sends. |
 | Browser access | Fixed to `127.0.0.1`, authenticated by a per-run random credential, with no CORS. |
-| Stored data | UUIDs, fingerprints, status, budget, deduplication markers, and short local logs only. |
+| Stored data | UUIDs, fingerprints, status, budget, deduplication markers, the continuation message, and short local logs only. |
 
 State is stored in `~/.codex-auto-resume/` with permissions limited to the current user. Full conversations, source code, account tokens, and raw private query errors are not stored.
 
@@ -337,8 +344,8 @@ Validated on a real Windows 11 machine with the Codex desktop App signed in to a
 Current automated suite:
 
 ```text
-Python tests: 145 total (134 run on Windows; 11 POSIX/macOS-only tests skipped)
-Browser UI tests: 40 passed
+Python tests: 154 total (143 run on Windows; 11 POSIX/macOS-only tests skipped)
+Browser UI tests: 42 passed
 Runtime dependencies: 0
 ```
 

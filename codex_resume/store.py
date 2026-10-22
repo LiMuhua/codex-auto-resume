@@ -6,6 +6,8 @@ import stat
 import time
 import uuid
 
+from .app import DEFAULT_CONTINUATION, normalize_continuation
+
 if os.name == 'nt':
     import msvcrt
 else:
@@ -32,7 +34,8 @@ class Store:
         CREATE TABLE IF NOT EXISTS watches (
           thread_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL,
           max_resumes INTEGER NOT NULL, status TEXT NOT NULL,
-          reason TEXT NOT NULL, pid INTEGER, updated REAL NOT NULL
+          reason TEXT NOT NULL, pid INTEGER, updated REAL NOT NULL,
+          continuation TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS attempts (
           thread_id TEXT NOT NULL, failed_turn TEXT NOT NULL,
@@ -41,6 +44,14 @@ class Store:
           PRIMARY KEY(thread_id, failed_turn)
         );
         ''')
+        columns = {row[1] for row in self.db.execute('PRAGMA table_info(watches)')}
+        if 'continuation' not in columns:
+            # Existing watches predate the page-configurable continuation. Keep
+            # their enrollment and fill the safe default exactly once.
+            with self.db:
+                self.db.execute("ALTER TABLE watches ADD COLUMN continuation TEXT NOT NULL DEFAULT ''")
+                self.db.execute("UPDATE watches SET continuation=? WHERE continuation=''",
+                                (DEFAULT_CONTINUATION,))
         self.lock_file = None
 
     def close(self):
@@ -84,12 +95,16 @@ class Store:
             raise RuntimeError('该任务已有一个监控进程')
         self.lock_file = f
 
-    def arm(self, thread_id, maximum):
+    def arm(self, thread_id, maximum, continuation=DEFAULT_CONTINUATION):
+        continuation = normalize_continuation(continuation)
         with self.db:
-            self.db.execute('''INSERT INTO watches VALUES (?,1,?,'starting','等待启动',NULL,?)
+            self.db.execute('''INSERT INTO watches
+                (thread_id,enabled,max_resumes,status,reason,pid,updated,continuation)
+                VALUES (?,1,?,'starting','等待启动',NULL,?,?)
                 ON CONFLICT(thread_id) DO UPDATE SET enabled=1,max_resumes=excluded.max_resumes,
-                status='starting',reason='等待启动',pid=NULL,updated=excluded.updated''',
-                (thread_id, maximum, time.time()))
+                status='starting',reason='等待启动',pid=NULL,updated=excluded.updated,
+                continuation=excluded.continuation''',
+                (thread_id, maximum, time.time(), continuation))
 
     def get(self, thread_id):
         row = self.db.execute('SELECT * FROM watches WHERE thread_id=?', (thread_id,)).fetchone()

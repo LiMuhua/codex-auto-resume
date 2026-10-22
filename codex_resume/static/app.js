@@ -36,6 +36,19 @@ const states = {
   uncertain: ['结果未确认', 'danger'], blocked: ['需要检查', 'warning'],
   budget: ['达到次数上限', 'muted'], changed: ['任务已变化', 'warning'], retrying: ['连接重试中', 'warning']
 };
+if ($('continuation') && !$('continuation').value && $('continuation').placeholder) {
+  // The page declares the default once in the textarea placeholder; make it
+  // the actual value so an unedited textarea sends the safe default.
+  $('continuation').value = $('continuation').placeholder;
+}
+function continuationDefault() {
+  return $('continuation').placeholder || $('continuation').value || '';
+}
+function continuationValue(id) {
+  const value = $(id).value.trim();
+  if (!value) throw new Error('请填写额度恢复后的续跑内容。');
+  return value;
+}
 function node(tag, cls, text) { const el = document.createElement(tag); if (cls) el.className = cls; if (text !== undefined) el.textContent = text; return el; }
 function notice(text, warning = false) { $('notice').textContent = text; $('notice').className = warning ? 'notice warning' : 'notice'; $('notice').hidden = !text; }
 function busy(button, value, label) { button.disabled = value; button.setAttribute('aria-busy', String(value)); button.textContent = label; }
@@ -126,6 +139,8 @@ function forget() {
   if ($('shutdown-dialog').open) $('shutdown-dialog').close();
   $('confirm-restart-check').checked = false;
   $('shutdown-watches').checked = false;
+  $('continuation').value = continuationDefault();
+  $('restart-continuation').value = '';
   $('watch-list').replaceChildren(node('p', 'empty-state', '已断开页面。后台监控不会因此停止；请重新连接后查看或停止。'));
   $('watch-updated').textContent = '监控状态未知';
   $('nav-count').textContent = '—'; $('task-count').textContent = '—';
@@ -355,9 +370,11 @@ function canEnroll(result) {
 async function startTask(event) {
   event.preventDefault();
   if(!checked || checked.threadId!==selectedId() || !canEnroll(checked) || starting) return;
+  let continuation;
+  try { continuation=continuationValue('continuation'); } catch(e) { $('action-error').textContent=e.message; return; }
   starting=true; busy($('start-button'),true,'正在开启…'); $('action-error').textContent='';
   const generation=authGeneration;
-  const data={threadId:checked.threadId,maxResumes:Number($('max-resumes').value),confirmed:$('confirm-start').checked};
+  const data={threadId:checked.threadId,maxResumes:Number($('max-resumes').value),confirmed:$('confirm-start').checked,continuation};
   if($('limit-id').value.trim()) data.limitId=$('limit-id').value.trim();
   try {
     const result=await mutate('start',data); if(generation!==authGeneration)return; $('task-dialog').close();
@@ -388,6 +405,9 @@ function openRestart(row) {
   $('restart-task').textContent=titleFor(row.thread_id);
   $('restart-reason').textContent=`${row.reason || '上次状态未知'} · 累计尝试 ${attempts} 次`;
   $('restart-max').value=String(Math.min(100,Math.max(1,maximum,attempts+1)));
+  const fallback=continuationDefault();
+  $('restart-continuation').placeholder=fallback;
+  $('restart-continuation').value=typeof row.continuation==='string' && row.continuation.trim() ? row.continuation : fallback;
   $('restart-error').textContent='';
   $('confirm-restart-check').checked=false;
   $('restart-dialog').showModal();
@@ -398,12 +418,14 @@ async function restartTask() {
   if(!$('confirm-restart-check').checked) { $('restart-error').textContent='请先确认只重新启动这个任务。'; return; }
   const maximum=Number($('restart-max').value);
   if(!Number.isInteger(maximum) || maximum<1 || maximum>100) { $('restart-error').textContent='累计续跑上限应为 1 到 100 的整数。'; return; }
+  let continuation;
+  try { continuation=continuationValue('restart-continuation'); } catch(e) { $('restart-error').textContent=e.message; return; }
   const target=restartTarget, generation=restartGeneration, auth=authGeneration;
   const current=()=>generation===restartGeneration && target===restartTarget
     && auth===authGeneration && $('restart-dialog').open;
   starting=true; busy($('confirm-restart'),true,'正在重启…'); $('restart-error').textContent='';
   try {
-    const result=await mutate('start',{threadId:target,maxResumes:maximum,confirmed:true});
+    const result=await mutate('start',{threadId:target,maxResumes:maximum,confirmed:true,continuation});
     if(!current()) return;
     $('restart-dialog').close();
     notice(`任务已重新提交监控，当前状态：${(states[result.status]||['待确认'])[0]}。请以下方监控记录为准。`); await refresh();

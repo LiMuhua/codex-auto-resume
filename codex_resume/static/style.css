@@ -30,3 +30,5 @@
 @media(max-height:550px){#task-dialog>.dialog-heading{padding:8px 16px}#task-dialog>.dialog-content{padding:8px 16px}.picker-toolbar{flex-wrap:nowrap}.picker-toolbar .meta{font-size:10px}#task-dialog .close-button{width:44px;height:44px}#picker-controls>label{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}}
 .watch-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 #restart-dialog{max-width:520px}#restart-dialog .selected-title{margin-bottom:4px}#restart-dialog .meta{margin-bottom:16px}#restart-dialog .confirmation{margin-top:16px}#restart-dialog .dialog-actions{margin-top:16px}
+
+textarea{font:inherit;min-height:96px;width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--ink);background:var(--surface);font-size:16px;line-height:1.5;resize:vertical}textarea::placeholder{color:var(--muted);opacity:.85}textarea:focus-visible{outline:3px solid var(--accent);outline-offset:4px}.continuation-field{margin-top:20px}

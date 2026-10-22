@@ -7,7 +7,8 @@ import sys
 import time
 import uuid
 
-from .app import Desktop, check_version, open_selected_thread
+from .app import (DEFAULT_CONTINUATION, Desktop, check_version, normalize_continuation,
+                  open_selected_thread)
 from .controller import Controller
 from .policy import quota_status
 from .rpc import ReadOnlyServer
@@ -28,6 +29,13 @@ def positive(value):
     if not 1 <= n <= 100:
         raise argparse.ArgumentTypeError('次数应在 1 到 100 之间')
     return n
+
+
+def continuation_text(value):
+    try:
+        return normalize_continuation(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def parser():
@@ -51,6 +59,9 @@ def parser():
         item.add_argument('thread', type=identifier)
         item.add_argument('--max-resumes', type=positive, default=3, help='该任务累计尝试次数上限（默认 3）')
         item.add_argument('--limit-id', default=None, help='多个额度桶时显式选择；单 codex 桶自动识别')
+        if name == 'start':
+            item.add_argument('--continuation', type=continuation_text, default=DEFAULT_CONTINUATION,
+                              help='额度恢复后发送的续跑内容；默认使用内置安全文本')
         if name == '_watch':
             item.add_argument('--lock-fd', type=int, default=None, help=argparse.SUPPRESS)
     return p
@@ -227,7 +238,7 @@ def main(argv=None):
             current = store.get(args.thread)
             if current and current['enabled']:
                 raise RuntimeError('该任务已有一个监控进程或待确认的启动记录')
-            store.arm(args.thread, args.max_resumes)
+            store.arm(args.thread, args.max_resumes, args.continuation)
             # Keep the same flock held across process creation. The child adopts
             # this descriptor; closing only the parent's copy cannot unlock it.
             windows = platform_name() == 'windows'

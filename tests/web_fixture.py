@@ -35,8 +35,10 @@ class Fixture(Backend):
                     'reason':'本轮正常结束；不推断还有工作需要继续' if args[0]==COMPLETE else '任务正在运行，等待观察',
                     'model':'test-model'}
         if action=='start':
+            continuation=next((value.split('=',1)[1] for value in args if value.startswith('--continuation=')), '')
             self.rows=[{'thread_id':args[0],'enabled':1,'status':'waiting_quota','reason':'模拟数据：额度耗尽，等待自然重置',
-                        'attempts':0,'max_resumes':int(args[2]),'updated':time.time()}]
+                        'attempts':0,'max_resumes':int(args[2]),'updated':time.time(),
+                        'continuation':continuation}]
             return {'threadId':args[0],'status':'waiting_quota'}
         if action=='stop':
             for row in self.rows:

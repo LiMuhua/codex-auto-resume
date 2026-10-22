@@ -2,7 +2,7 @@
 import time
 import socket
 
-from .app import ConnectionUnavailable
+from .app import ConnectionUnavailable, DEFAULT_CONTINUATION, normalize_continuation
 from .policy import decide, fingerprint, quota_status
 
 
@@ -17,7 +17,7 @@ class Controller:
         self.failures = 0
         self.open_thread = open_thread
         self.next_open = 0
-        self.notify = notify or (lambda _status, _reason: None)
+        self.notify = notify or (lambda *_: None)
 
     def step(self):
         watch = self.store.get(self.thread_id)
@@ -25,6 +25,10 @@ class Controller:
             return False
         if self.store.uncertain(self.thread_id):
             return self.end('uncertain', '存在未确认的发送；请在 App 检查，禁止自动重发')
+        try:
+            continuation = normalize_continuation(watch.get('continuation') or DEFAULT_CONTINUATION)
+        except ValueError as exc:
+            return self.end('blocked', f'续跑内容无效：{exc}')
         stage = 'app'
         try:
             with self.desktop_factory() as desktop:
@@ -72,7 +76,8 @@ class Controller:
                         return self.end('uncertain', '发送已取消；保留防重记录')
                     resumed = desktop.resume(self.thread_id, baseline, message_id,
                         dispatch_guard=lambda: self.store.can_dispatch(
-                            self.thread_id, decision.turn_id, message_id))
+                            self.thread_id, decision.turn_id, message_id),
+                        continuation=continuation)
                     self.store.acknowledged(self.thread_id, decision.turn_id, resumed)
                 except Exception:
                     return self.end('uncertain', '续跑没有得到可验证的确认；请在 App 检查，不会重发')

@@ -7,8 +7,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
+const DEFAULT_CONTINUATION = '默认续跑内容：继续核对进度。';
 class Element {
-  constructor() { this.children=[];this.listeners={};this.attrs={};this.dataset={};this.value='';this._text='';this.hidden=false;this.open=false;this.checked=false; }
+  constructor() { this.children=[];this.listeners={};this.attrs={};this.dataset={};this.value='';this.placeholder='';this._text='';this.hidden=false;this.open=false;this.checked=false; }
   set textContent(value) { this._text=String(value);this.children=[]; }
   get textContent() { return this._text + this.children.map(c=>c.textContent).join(' '); }
   append(...children) { this.children.push(...children); }
@@ -33,6 +34,7 @@ function harness(shared = {}) {
   // login() looks its submit button up inside the form; keep the synthetic
   // DOM shaped like index.html so token-fragment auto-login can run.
   const loginButton=el('login-button');loginButton.className='utton';el('login-form').append(loginButton);
+  el('continuation').placeholder=DEFAULT_CONTINUATION;
   const context=vm.createContext({
     document:{getElementById:el,createElement:()=>new Element(),addEventListener(){},hidden:false},
     sessionStorage:{getItem(key){return session.has(key)?session.get(key):null;},setItem(key,value){session.set(key,String(value));},removeItem(key){session.delete(key);}},
@@ -208,6 +210,26 @@ function prepareStart(h) {
   h.el('max-resumes').value='1';h.el('confirm-start').checked=true;
 }
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+test('continuation starts from the declared page default and resets on disconnect',()=>{
+  const h=harness();
+  assert.equal(h.el('continuation').value,DEFAULT_CONTINUATION);
+  h.el('continuation').value='临时内容';
+  h.run('forget()');
+  assert.equal(h.el('continuation').value,DEFAULT_CONTINUATION);
+  assert.equal(h.el('restart-continuation').value,'');
+});
+test('start sends the configured continuation and refuses an empty one',{timeout:2000},async()=>{
+  const h=harness();prepareStart(h);
+  h.el('continuation').value='  自定义续跑：先核对进度。  ';
+  const request=h.run('startTask({preventDefault(){}})');await tick();
+  assert.equal(h.pending[0].url,'/api/start');
+  assert.equal(JSON.parse(h.pending[0].options.body).continuation,'自定义续跑：先核对进度。');
+  h.pending[0].reply({threadId:A,status:'watching'});await request;
+  const empty=harness();prepareStart(empty);empty.el('continuation').value='   ';
+  await empty.run('startTask({preventDefault(){}})');
+  assert.equal(empty.pending.length,0);
+  assert.match(empty.el('action-error').textContent,/请填写额度恢复后的续跑内容/);
+});
 test('POST success requires matching task and recognized start status',{timeout:2000},async()=>{
   for(const result of [{threadId:B,status:'watching'},{threadId:A,status:'invented'},{}]) {
     const h=harness();prepareStart(h);const request=h.run('startTask({preventDefault(){}})');
@@ -413,8 +435,8 @@ test('disconnect hides the stop-service button and closes its dialog',()=>{
 function watchActions(h,index){
   return h.el('watch-list').children[index].children[1].children[1];
 }
-function restartRow(h,status='stopped',attempts=0,max=3){
-  h.run(`renderWatches([{thread_id:'${A}',enabled:0,status:'${status}',reason:'test reason',attempts:${attempts},max_resumes:${max},updated:1000}])`);
+function restartRow(h,status='stopped',attempts=0,max=3,continuation='重启续跑内容'){
+  h.run(`renderWatches([{thread_id:'${A}',enabled:0,status:'${status}',reason:'test reason',attempts:${attempts},max_resumes:${max},updated:1000,continuation:'${continuation}'}])`);
 }
 test('disabled watch rows offer restart without the check flow; enabled rows only stop',()=>{
   const h=harness();
@@ -432,27 +454,31 @@ test('restart requires consent and sends one guarded start with the chosen budge
   assert.equal(h.el('restart-dialog').open,true);
   assert.equal(h.el('restart-task').textContent,'Task A');
   assert.equal(h.el('restart-max').value,'4');
+  assert.equal(h.el('restart-continuation').value,'重启续跑内容');
   assert.equal(h.el('confirm-restart').disabled,true);
   h.el('confirm-restart-check').checked=true;h.el('confirm-restart-check').emit('change');
   assert.equal(h.el('confirm-restart').disabled,false);
   h.el('restart-max').value='5';
+  h.el('restart-continuation').value='  修改后的重启续跑  ';
   const request=h.run('restartTask()');
   await tick();
   assert.equal(h.pending[0].url,'/api/start');
-  assert.deepEqual(JSON.parse(h.pending[0].options.body),{threadId:A,maxResumes:5,confirmed:true});
+  assert.deepEqual(JSON.parse(h.pending[0].options.body),{threadId:A,maxResumes:5,confirmed:true,continuation:'修改后的重启续跑'});
   h.pending[0].reply({threadId:A,status:'watching'});await request;
   assert.equal(h.el('restart-dialog').open,false);
   assert.match(h.el('notice').textContent,/重新提交监控/);
   assert.equal(h.run('pendingMutation()'),null);
 });
-test('invalid restart budget never dispatches',async()=>{
-  const h=harness();restartRow(h);
-  watchActions(h,0).children[0].emit('click');
-  h.el('confirm-restart-check').checked=true;h.el('confirm-restart-check').emit('change');
-  h.el('restart-max').value='0';
-  await h.run('restartTask()');
-  assert.equal(h.pending.length,0);
-  assert.match(h.el('restart-error').textContent,/1 到 100/);
+test('invalid restart budget or empty continuation never dispatches',async()=>{
+  for(const setup of [h=>{h.el('restart-max').value='0';},h=>{h.el('restart-continuation').value='  ';}]){
+    const h=harness();restartRow(h);
+    watchActions(h,0).children[0].emit('click');
+    h.el('confirm-restart-check').checked=true;h.el('confirm-restart-check').emit('change');
+    setup(h);
+    await h.run('restartTask()');
+    assert.equal(h.pending.length,0);
+    assert.match(h.el('restart-error').textContent,/1 到 100|请填写额度恢复后的续跑内容/);
+  }
 });
 test('a closed restart dialog ignores late success or failure and refuses same-UUID reopen',{timeout:2000},async()=>{
   for(const outcome of ['success','failure']){

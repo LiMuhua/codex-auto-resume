@@ -12,8 +12,10 @@ import time
 from urllib.parse import urlsplit, parse_qs
 import uuid
 
+from .app import DEFAULT_CONTINUATION, normalize_continuation
 from .runtime import hidden_window_kwargs
 
+MAX_REQUEST_BODY = 16 * 1024
 STATIC = Path(__file__).with_name('static')
 ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
           '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
@@ -37,7 +39,7 @@ def thread_id(value):
 
 
 class Backend:
-    """Reuse the guarded CLI, never accept arbitrary paths, prompts or commands."""
+    """Reuse the guarded CLI; only the selected task's continuation text is configurable."""
     def __init__(self, args):
         self.args = args
         self.quota_lock = threading.Lock()
@@ -117,7 +119,8 @@ class Backend:
     def mutate(self, action, data):
         if not isinstance(data, dict):
             raise APIError('请求必须是 JSON 对象。')
-        allowed = {'threadId'} if action == 'stop' else {'threadId', 'maxResumes', 'limitId', 'confirmed'}
+        allowed = ({'threadId'} if action == 'stop' else
+                   {'threadId', 'maxResumes', 'limitId', 'confirmed', 'continuation'})
         if set(data) - allowed:
             raise APIError('请求包含不支持的字段。')
         target = thread_id(data.get('threadId'))
@@ -137,10 +140,15 @@ class Backend:
         if limit is not None and (not isinstance(limit, str) or not 1 <= len(limit) <= 100
                                   or limit.startswith('-') or not all(c.isalnum() or c in '_-.' for c in limit)):
             raise APIError('额度桶 ID 格式不正确。')
+        try:
+            continuation = normalize_continuation(data.get('continuation', DEFAULT_CONTINUATION))
+        except ValueError as exc:
+            raise APIError(str(exc)) from exc
         if not self.mutation_lock.acquire(blocking=False):
             raise APIError('另一个开启请求仍在处理，请查看监控记录，不要重复提交。', 409)
         try:
-            args = ['start', target, '--max-resumes', str(maximum)]
+            args = ['start', target, '--max-resumes', str(maximum),
+                    '--continuation=' + continuation]
             if limit:
                 args += ['--limit-id', limit]
             return self.command(*args)
@@ -260,7 +268,7 @@ class Handler(BaseHTTPRequestHandler):
         if len(lengths) != 1 or not lengths[0].isdigit() or self.headers.get('Transfer-Encoding'):
             raise APIError('请求长度不正确。')
         length = int(lengths[0])
-        if not 0 < length <= 2048:
+        if not 0 < length <= MAX_REQUEST_BODY:
             raise APIError('请求体过大或为空。', 413)
         try:
             return json.loads(self.rfile.read(length))

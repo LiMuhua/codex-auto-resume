@@ -16,9 +16,9 @@ In the commands below, use `.\start\start.cmd` in place of `./start/start` when 
 - List conversations only when the user asks to find or select one. Treat `./start/start list` as discovery, never as authorization to manage every result.
 - A start or stop target must be one exact UUID explicitly selected by the user. Do not infer it from “latest”, a fuzzy title, or conversation text.
 - Before starting, run `./start/start check <UUID>` and require `canMonitor: true`. Starting still requires the user's explicit request; a successful check alone is not consent.
-- Start with `./start/start start <UUID>` and keep the default budget unless the user explicitly chooses another limit. Never use resets, alternate accounts, approvals, or payment as a workaround.
+- Start with `./start/start start <UUID>` and keep the default budget and built-in continuation text unless the user explicitly chooses another limit or supplies task-specific continuation text for this exact task (pass it with `--continuation`). Never use resets, alternate accounts, approvals, or payment as a workaround.
 - Stop only the selected task with `./start/start stop <UUID>`. Explain that stopping cancels future continuations and does not interrupt work already running in Codex.
 
 ## Safety boundaries
 
-Never auto-enroll multiple tasks, scan cloud ChatGPT conversations, send a custom prompt, approve requests, or retry a start whose result is uncertain. Report command failures without weakening version checks or deduplication. The Codex App must remain open; closing the terminal does not stop an already launched watcher, while restarting the computer requires starting it again.
+Never auto-enroll multiple tasks, scan cloud ChatGPT conversations, send a prompt unrelated to continuing the selected task, approve requests, or retry a start whose result is uncertain. Report command failures without weakening version checks or deduplication. The Codex App must remain open; closing the terminal does not stop an already launched watcher, while restarting the computer requires starting it again.

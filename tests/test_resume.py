@@ -10,8 +10,9 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from codex_resume.app import (AppError, Desktop, MAX_FRAME, ThreadUnavailable,
-                              WindowsPipe, check_version, open_selected_thread)
+from codex_resume.app import (AppError, DEFAULT_CONTINUATION, Desktop, MAX_CONTINUATION_LENGTH,
+                              MAX_FRAME, ThreadUnavailable, WindowsPipe, check_version,
+                              normalize_continuation, open_selected_thread)
 from codex_resume.__main__ import watch_process_spec
 from codex_resume.controller import Controller
 from codex_resume.policy import decide, fingerprint, quota_status, latest_turn
@@ -432,14 +433,14 @@ class TaskDiscoveryTests(unittest.TestCase):
 
 class FakeDesktop:
     def __init__(self, data):
-        self.data, self.calls, self.fail = data, [], False
+        self.data, self.calls, self.texts, self.fail = data, [], [], False
     def __enter__(self): return self
     def __exit__(self, *args): pass
     def snapshot(self, thread): return self.data
-    def resume(self, thread, baseline, message, dispatch_guard=None):
+    def resume(self, thread, baseline, message, dispatch_guard=None, continuation=None):
         if dispatch_guard is not None and not dispatch_guard():
             raise AppError('synthetic cancelled dispatch')
-        self.calls.append((thread, baseline, message))
+        self.calls.append((thread, baseline, message)); self.texts.append(continuation)
         if self.fail: raise TimeoutError()
         return 'new-turn'
 
@@ -459,10 +460,21 @@ class ControllerTests(unittest.TestCase):
     def tearDown(self):
         self.store.close(); self.temp.cleanup()
 
-    def test_resume_records_ack(self):
+    def test_resume_records_ack_and_uses_the_stored_continuation(self):
+        self.store.arm(THREAD, 3, '自定义续跑：先核对进度再继续。')
         self.assertTrue(self.controller.step())
         self.assertEqual(len(self.desktop.calls), 1)
+        self.assertEqual(self.desktop.texts, ['自定义续跑：先核对进度再继续。'])
         self.assertEqual(self.store.attempt(THREAD, 't1')['resumed_turn'], 'new-turn')
+    def test_default_continuation_is_the_safe_page_default(self):
+        self.assertTrue(self.controller.step())
+        self.assertEqual(self.desktop.texts, [DEFAULT_CONTINUATION])
+    def test_invalid_stored_continuation_blocks_before_any_app_read_or_send(self):
+        self.store.db.execute("UPDATE watches SET continuation='   ' WHERE thread_id=?", (THREAD,))
+        self.store.db.commit()
+        self.assertFalse(self.controller.step())
+        self.assertEqual(self.store.get(THREAD)['status'], 'blocked')
+        self.assertEqual(self.desktop.calls, [])
 
     def test_wait_does_not_send_or_requery_early(self):
         self.quota = quota(100)
@@ -703,6 +715,37 @@ class ControllerTests(unittest.TestCase):
         finally: other.close()
 
 
+class StoreContinuationTests(unittest.TestCase):
+    def test_legacy_database_fills_existing_watches_with_the_safe_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = sqlite3.connect(Path(directory) / 'state.sqlite3')
+            db.executescript('''
+            CREATE TABLE watches (
+              thread_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL,
+              max_resumes INTEGER NOT NULL, status TEXT NOT NULL,
+              reason TEXT NOT NULL, pid INTEGER, updated REAL NOT NULL
+            );''')
+            db.execute("INSERT INTO watches VALUES (?,1,3,'stopped','legacy',NULL,1)", (THREAD,))
+            db.commit(); db.close()
+            store = Store(directory)
+            try:
+                self.assertEqual(store.get(THREAD)['continuation'], DEFAULT_CONTINUATION)
+                store.arm(THREAD, 4, '重启后的续跑内容')
+                self.assertEqual(store.get(THREAD)['continuation'], '重启后的续跑内容')
+            finally:
+                store.close()
+    def test_invalid_continuation_is_rejected_before_arming(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(directory)
+            try:
+                for value in ('', '   ', 'a\x00b', 'x' * (MAX_CONTINUATION_LENGTH + 1)):
+                    with self.subTest(value=value), self.assertRaises(ValueError):
+                        store.arm(THREAD, 3, value)
+                self.assertIsNone(store.get(THREAD))
+            finally:
+                store.close()
+
+
 class FakeSocket:
     def __init__(self, messages):
         self.data = b''.join(struct.pack('<I', len(b)) + b for b in (json.dumps(m).encode() for m in messages))
@@ -860,8 +903,23 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(app.resume(THREAD,fingerprint(state()),'message'),'new')
         request=calls[0][1]['turnStart']['request']
         self.assertEqual(set(request), {'threadId','clientUserMessageId','input'})
+        self.assertEqual(request['input'], [{'type':'text','text':DEFAULT_CONTINUATION,'text_elements':[]}])
         with self.assertRaises(AppError): app.resume(THREAD,'changed','message2')
         self.assertEqual(len(calls),1)
+
+    @patch('codex_resume.app.check_version')
+    def test_resume_sends_only_the_normalized_configured_continuation(self, check):
+        app=Desktop('/unused'); app.owner='owner'; app.snapshot=lambda tid: state()
+        calls=[]
+        def request(method, params, version, target):
+            calls.append((method,params));return {'result':{'result':{'turn':{'id':'new'}}}}
+        app.request=request
+        with patch.object(app, '_drain_pending'):
+            app.resume(THREAD,fingerprint(state()),'message',continuation='  first' + chr(13) + chr(10) + 'second  ')
+        self.assertEqual(calls[0][1]['turnStart']['request']['input'][0]['text'],'first' + chr(10) + 'second')
+        for invalid in ('', '   ', 'a\x00b', 'x'*(MAX_CONTINUATION_LENGTH+1)):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                normalize_continuation(invalid)
 
     def test_read_only_rpc_refuses_mutations(self):
         server=ReadOnlyServer('/unused','/unused')
@@ -949,6 +1007,33 @@ class StartupTests(unittest.TestCase):
                 ledger.lock(THREAD)  # Failed launch released the parent's lock.
             finally:
                 ledger.close()
+
+    @patch('codex_resume.__main__.check_version')
+    @patch('codex_resume.__main__.inspect_task', return_value={'canMonitor': True})
+    def test_start_persists_the_page_configured_continuation(self, inspect, version):
+        from codex_resume.__main__ import main
+        with tempfile.TemporaryDirectory() as directory:
+            def spawn(*args, **kwargs):
+                child_store = Store(directory)
+                try:
+                    child_store.update(THREAD, 'watching', 'synthetic child')
+                finally:
+                    child_store.close()
+                return SimpleNamespace(pid=321, poll=lambda: None)
+            with patch('codex_resume.__main__.subprocess.Popen', side_effect=spawn):
+                main(['--state-dir', directory, 'start', THREAD,
+                      '--continuation', '  自定义续跑' + chr(13) + chr(10) + '第二行  '])
+            ledger = Store(directory)
+            try:
+                self.assertEqual(ledger.get(THREAD)['continuation'], '自定义续跑' + chr(10) + '第二行')
+            finally:
+                ledger.close()
+    def test_start_rejects_an_empty_continuation_before_any_side_effect(self):
+        from codex_resume.__main__ import main
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(SystemExit):
+                main(['--state-dir', directory, 'start', THREAD, '--continuation', '   '])
+            self.assertFalse((Path(directory) / 'state.sqlite3').exists())
 
     @patch('codex_resume.__main__.check_version')
     @patch('codex_resume.__main__.inspect_task', return_value={'canMonitor': True})
