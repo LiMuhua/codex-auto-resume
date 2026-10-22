@@ -157,6 +157,16 @@ class BackendTests(unittest.TestCase):
             server.serve_forever.side_effect=KeyboardInterrupt
             serve(args)
         self.assertEqual(companion.call_args.args[0],('127.0.0.1',0))
+    def test_serve_uses_provided_credential_and_reports_readiness(self):
+        args=SimpleNamespace(port=0,home=Path('/tmp/home'),app=Path('/tmp/app'),state_dir=Path('/tmp/state'))
+        ready=[]
+        with patch('codex_resume.web.CompanionServer') as companion:
+            server=companion.return_value.__enter__.return_value
+            server.origin='http://127.0.0.1:1234';server.token='fixed-credential'
+            server.serve_forever.side_effect=KeyboardInterrupt
+            serve(args,token='fixed-credential',ready=lambda origin,token: ready.append((origin,token)))
+        self.assertEqual(companion.call_args.kwargs['token'],'fixed-credential')
+        self.assertEqual(ready,[('http://127.0.0.1:1234','fixed-credential')])
 
 
 class ServerLimitTests(unittest.TestCase):

@@ -35,7 +35,7 @@ jobs:
       - name: Node regression (no real App or business task)
         run: node --test tests/test_ui.cjs
       - name: Compile Python modules
-        run: python -m compileall -q codex_resume
+        run: python -m compileall -q codex_resume start/start.pyw
       - name: Check browser JavaScript syntax
         run: node --check codex_resume/static/app.js
 

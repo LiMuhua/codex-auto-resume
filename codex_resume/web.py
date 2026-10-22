@@ -250,11 +250,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send(500, {'error': '操作结果未确认，请刷新监控记录，不要自动重试。'})
 
 
-def serve(args):
-    with CompanionServer(('127.0.0.1', args.port), Backend(args)) as server:
+def serve(args, token=None, ready=None):
+    with CompanionServer(('127.0.0.1', args.port), Backend(args), token=token) as server:
         print(f'控制台地址：{server.origin}/', flush=True)
         print(f'连接凭据：{server.token}', flush=True)
         print('仅向你自己的设备提供凭据。服务重启后凭据失效；网页关闭不会停止监控。', flush=True)
+        if ready is not None:
+            ready(server.origin, server.token)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
