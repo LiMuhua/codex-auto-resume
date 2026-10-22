@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="codex_resume/static/icon.svg" width="96" alt="Codex Auto Resume 图标">
+  <img src="../codex_resume/static/icon.svg" width="96" alt="Codex Auto Resume 图标">
 </p>
 
 <h1 align="center">Codex Auto Resume</h1>
@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> ·
+  <a href="../README.md">English</a> ·
   <a href="#三步启动">快速开始</a> ·
   <a href="#工作原理">工作原理</a> ·
   <a href="#安全边界">安全边界</a> ·
@@ -35,13 +35,16 @@
 
 它不会切换账号、购买额度、使用重置券、自动批准工具调用、新建替代对话，也不会扫描并接管所有未完成任务。
 
+> [!NOTE]
+> 本仓库是从 [progressrdx/codex-auto-resume](https://github.com/progressrdx/codex-auto-resume) 分支出来的独立衍生仓库。创建时直接新建了仓库，没有使用 GitHub 的 Fork 功能，因此本仓库的 Issue 和 Pull Request 不会同步到上游项目。
+
 > [!IMPORTANT]
 > 这是非官方实验工具，与 OpenAI 没有关联或背书。项目维护者已经完成两次 macOS 和一次 Windows 11 真实账户跨自然额度重置周期的端到端验证，均成功在原任务中自动确认续跑。测试范围和剩余限制详见[当前验证状态](#当前验证状态)。
 
 ## 界面预览
 
 <p align="center">
-  <img src="docs/assets/dashboard.png" alt="使用模拟额度和任务数据的本地管理界面" width="100%">
+  <img src="assets/dashboard.png" alt="使用模拟额度和任务数据的本地管理界面" width="100%">
 </p>
 
 <p align="center"><sub>截图使用完全隔离的模拟数据，不包含真实账户或对话信息。</sub></p>
@@ -65,20 +68,28 @@
 - 已安装、登录并保持打开的 Codex 桌面 App
 - macOS 当前适配版本：`26.820.60940 / build 7119`、`26.1002.52244 / build 13536`
 - Windows 当前适配版本：App `26.901.31953.0`、CLI `0.153.1`
-- 默认路径：macOS `/Applications/ChatGPT.app`；Windows `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`
+- 默认路径：macOS `/Applications/ChatGPT.app`；Windows `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`（Microsoft Store 版本会自动查找 `bin\<哈希>\codex.exe`）
 
 Windows 版请在 Windows 原生 PowerShell 或命令提示符中运行，不要放到 WSL 里运行。本工具需要连接 Windows Codex App 的本机命名管道。Codex 官方 Windows App 本身支持原生 Windows 和可选 WSL 工作区，但这是两个不同的运行环境。
 
 遇到未验证的 App 版本时，工具会拒绝运行，而不是猜测内部协议。
+
+### 双击启动（Windows）
+
+双击 `start\start.vbs`。它会用 `pythonw.exe`（或无需窗口的 `pyw.exe`）运行同目录的 `start.pyw`，完全不出现控制台窗口，也不依赖系统是否关联了 `.pyw` 文件。`start\start.pyw` 会在后台静默启动本机控制台，服务就绪后自动打开浏览器，并把本次启动的凭据放在链接中，让页面自动连接。启动失败时会弹窗提示并给出日志路径。需要关闭时，点击页面右上角的“停止服务”；确认框中可以同时取消所有已托管任务的后台监控进程。
+
+如果系统已经把 `.pyw` 关联到 `pythonw.exe`，也可以直接双击 `start\start.pyw`；在终端运行 `python start\start.pyw` 效果相同。
+
+macOS 或 Linux 也可以运行 `python3 start/start.pyw`。下面的终端启动方式仍保留，用于只读命令和排查问题。
 
 ### 让 Codex 帮你启动（新手推荐）
 
 拉取源码后，在 Codex 桌面 App 中把 `codex-auto-resume` 文件夹作为项目打开，在该项目中新建一个任务，然后把下面这段话发给 Codex：
 
 ```text
-请先阅读 README.md、README.zh-CN.md、AGENTS.md 和
+请先阅读 README.md、docs/README.zh-CN.md、AGENTS.md 和
 .agents/skills/codex-auto-resume/SKILL.md。检查本机是否满足运行条件。macOS 使用
-./resume，Windows 使用 .\resume.cmd；先运行 doctor，如果只读检查通过，再运行 web，
+./start/start，Windows 使用 .\start\start.cmd；先运行 doctor，如果只读检查通过，再运行 web，
 并保持本机服务运行。
 把这次服务输出的准确控制台地址和连接凭据告诉我。在我明确选择一个准确任务前，
 不要选择、启动、停止或托管任何 Codex 任务。
@@ -93,15 +104,15 @@ Codex 可以替你检查环境并启动本机服务。根据你的 Codex 权限�
 连接凭据：Jr7...本次启动生成的其余随机字符
 ```
 
-在同一台电脑的浏览器中打开控制台地址，粘贴这段凭据，然后点击“连接”。这个凭据由 `./resume web`（Windows 为 `.\resume.cmd web`）在你的电脑上临时生成，**不是** OpenAI API Key、ChatGPT 密码、Codex 账号令牌或 GitHub Token，也不需要去任何网站或账号设置中申请。
+在同一台电脑的浏览器中打开控制台地址，粘贴这段凭据，然后点击“连接”。这个凭据由 `./start/start web`（Windows 为 `.\start\start.cmd web`）在你的电脑上临时生成，**不是** OpenAI API Key、ChatGPT 密码、Codex 账号令牌或 GitHub Token，也不需要去任何网站或账号设置中申请。
 
 > [!NOTE]
-> 每次启动 Web 服务都会生成一个新的随机凭据。它只出现在本次服务的终端输出中，也只在该进程运行期间有效。重新启动 `./resume web` 后，旧凭据立即失效。如果不小心公开了凭据，在服务终端按 `Control-C` 停止，然后重新启动即可更换。
+> 每次启动 Web 服务都会生成一个新的随机凭据。它只出现在本次服务的终端输出（或 `start/start.pyw` 的私有日志）中，也只在该进程运行期间有效。`start/start.pyw` 还会把它写入 `~/.codex-auto-resume/` 下仅当前用户可读的会话文件，以便再次双击时重新打开控制台；自动登录时凭据放在链接的片段中，不会随 HTTP 请求发送给服务。重新启动 Web 服务后，旧凭据立即失效。如果不小心公开了凭据，点击页面右上角“停止服务”或在终端按 `Control-C` 停止服务，然后重新启动即可更换。
 
 管理界面连接成功后，可以让 Codex 先列出任务，但不托管任何任务：
 
 ```text
-请执行适合当前系统的 list 命令（macOS：./resume list；Windows：.\resume.cmd list），
+请执行适合当前系统的 list 命令（macOS：./start/start list；Windows：.\start\start.cmd list），
 列出本地可用的 Codex 任务，但不要托管任何任务，
 我会先明确选择一个准确任务。
 ```
@@ -135,13 +146,13 @@ cd codex-auto-resume
 macOS：
 
 ```bash
-./resume doctor
+./start/start doctor
 ```
 
 Windows（PowerShell 或命令提示符）：
 
 ```powershell
-.\resume.cmd doctor
+.\start\start.cmd doctor
 ```
 
 `doctor` 只检查 App 版本、本地连接和额度窗口，不会运行模型、选择任务或发送消息。
@@ -151,13 +162,13 @@ Windows（PowerShell 或命令提示符）：
 macOS：
 
 ```bash
-./resume web
+./start/start web
 ```
 
 Windows：
 
 ```powershell
-.\resume.cmd web
+.\start\start.cmd web
 ```
 
 终端会输出本机地址和每次启动重新生成的连接凭据。凭据由本机进程在启动时生成，不来自 OpenAI、ChatGPT、Codex 或 GitHub：
@@ -171,46 +182,47 @@ Windows：
 
 ## 使用管理界面
 
-1. 输入 `./resume web` 输出的连接凭据。
+1. 输入 `./start/start web` 输出的连接凭据；使用 `start/start.pyw` 时页面会自动连接。
 2. 查看五小时和每周额度窗口。
 3. 点击“托管长任务”，从本地 Codex 对话中选择一个任务。
 4. 等待只读检查确认这个准确任务是否具备监控资格。
 5. 核对累计续跑次数，默认最多 3 次，然后确认加入托管。
-6. 需要取消时点击“停止监控”。
+6. 需要取消时点击“停止监控”。已停止的任务会保留“重新启动”按钮：确认一次后，工具会重新只读核验实时状态，并按你填写的上限重新开启监控，不需要重走选择任务流程。
+7. 需要关闭本机服务时，点击右上角“停止服务”；在确认框中勾选选项可同时取消所有已托管任务的监控。
 
-停止监控只取消未来续跑，不会中断 Codex 中已经运行的工作，也无法撤回 App 已经接受的消息。关闭网页或 Web 服务不会停止已经启动的 watcher。
+停止监控只取消未来续跑，不会中断 Codex 中已经运行的工作，也无法撤回 App 已经接受的消息。关闭网页或 Web 服务不会停止已经启动的 watcher。默认情况下，“停止服务”只结束本机控制台进程；勾选确认框中的选项可同时取消所有已托管任务的监控。
 
 ## 命令行使用
 
-下面以 macOS 的 `./resume` 为例。Windows 将每条命令开头替换成 `.\resume.cmd`，其余参数完全相同。
+下面以 macOS 的 `./start/start` 为例。Windows 将每条命令开头替换成 `.\start\start.cmd`，其余参数完全相同。
 
 ```bash
 # 发现本地对话，但不会自动托管。
-./resume list
+./start/start list
 
 # 只读检查一个准确 UUID。
-./resume check <任务UUID>
+./start/start check <任务UUID>
 
 # 以默认累计上限 3 次启动监控。
-./resume start <任务UUID>
+./start/start start <任务UUID>
 
 # 查看持久化监控记录。
-./resume status
+./start/start status
 
 # 取消这个任务未来的自动续跑。
-./resume stop <任务UUID>
+./start/start stop <任务UUID>
 ```
 
 明确需要其他累计上限时：
 
 ```bash
-./resume start <任务UUID> --max-resumes 5
+./start/start start <任务UUID> --max-resumes 5
 ```
 
 如果账户返回多个额度桶，必须明确选择：
 
 ```bash
-./resume start <任务UUID> --limit-id codex
+./start/start start <任务UUID> --limit-id codex
 ```
 
 工具不会猜测应该使用哪个额度桶。
@@ -272,13 +284,13 @@ flowchart LR
 
 | 需求 | 示例 |
 | --- | --- |
-| 更换本机端口 | `./resume web --port 9000` |
-| App 位于其他目录 | `./resume --app "/Applications/你的 App.app" web` |
-| 使用其他 Codex 目录 | `./resume --home /path/to/.codex web` |
-| 使用其他状态目录 | `./resume --state-dir /private/path web` |
-| 指定 Python | `PYTHON_BIN=/path/to/python3 ./resume web` |
+| 更换本机端口 | `./start/start web --port 9000` |
+| App 位于其他目录 | `./start/start --app "/Applications/你的 App.app" web` |
+| 使用其他 Codex 目录 | `./start/start --home /path/to/.codex web` |
+| 使用其他状态目录 | `./start/start --state-dir /private/path web` |
+| 指定 Python | `PYTHON_BIN=/path/to/python3 ./start/start web` |
 
-Windows 自定义路径示例：`.\resume.cmd --app "C:\path\to\codex.exe" web`。通常不需要填写，启动器会使用当前用户的默认 App 路径。
+Windows 自定义路径示例：`.\start\start.cmd --app "C:\path\to\codex.exe" web`。通常不需要填写，启动器会使用当前用户的默认 App 路径。
 
 工具故意不提供绑定 `0.0.0.0`、局域网地址或公网地址的选项。
 
@@ -288,11 +300,11 @@ Windows 自定义路径示例：`.\resume.cmd --app "C:\path\to\codex.exe" web`�
 
 ```bash
 git pull
-./resume doctor
-./resume web
+./start/start doctor
+./start/start web
 ```
 
-Windows 对应命令为 `git pull`、`.\resume.cmd doctor`、`.\resume.cmd web`。
+Windows 对应命令为 `git pull`、`.\start\start.cmd doctor`、`.\start\start.cmd web`。
 
 更新源码不会清除已有预算和防重复账本。Web 服务重启会更换浏览器连接凭据，已经运行的 watcher 不会热更新新源码。
 
@@ -320,8 +332,8 @@ Windows 对应命令为 `git pull`、`.\resume.cmd doctor`、`.\resume.cmd web`�
 当前自动化测试：
 
 ```text
-Python：108 项（本机 107 项通过，1 项 Windows 专用启动器测试跳过）
-浏览器 UI：26 项通过
+Python：145 项（Windows 本机运行 134 项，11 项 POSIX/macOS 专用测试跳过）
+浏览器 UI：40 项通过
 运行时第三方依赖：0
 ```
 
@@ -343,13 +355,13 @@ Python：108 项（本机 107 项通过，1 项 Windows 专用启动器测试跳
 <details>
 <summary><strong>管理界面无法连接</strong></summary>
 
-保持 Web 服务进程运行，使用它输出的准确地址和同一次启动生成的凭据。旧服务的凭据会按设计失效。Windows 使用 `.\resume.cmd web`。
+保持 Web 服务进程运行，使用它输出的准确地址和同一次启动生成的凭据。旧服务的凭据会按设计失效。Windows 使用 `.\start\start.cmd web`。
 </details>
 
 <details>
 <summary><strong>任务不能加入托管</strong></summary>
 
-运行 `./resume check <任务UUID>`。已完成、归档、中断、空对话、等待审批或等待输入的任务都不能托管。
+运行 `./start/start check <任务UUID>`。已完成、归档、中断、空对话、等待审批或等待输入的任务都不能托管。
 </details>
 
 <details>
@@ -361,7 +373,7 @@ Python：108 项（本机 107 项通过，1 项 Windows 专用启动器测试跳
 <details>
 <summary><strong>8765 端口已被占用</strong></summary>
 
-使用其他本机端口，例如 `./resume web --port 9000`。
+使用其他本机端口，例如 `./start/start web --port 9000`。
 </details>
 
 ## 开发验证
@@ -370,7 +382,7 @@ Python：108 项（本机 107 项通过，1 项 Windows 专用启动器测试跳
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m compileall -q codex_resume
+python3 -m compileall -q codex_resume start/start.pyw
 node --test tests/test_ui.cjs
 node --check codex_resume/static/app.js
 python3 scripts/verify_release.py
@@ -399,9 +411,9 @@ python3 scripts/verify_release.py
 
 不需要。所有功能都运行在 Codex 桌面 App 所在的同一台电脑上。
 
-### 关闭终端会停止监控吗？
+### 关闭终端或网页会停止监控吗？
 
-关闭启动 watcher 的终端不会停止 watcher。关闭 Web 服务只会关闭管理界面。电脑重启后需要重新启动监控。
+关闭启动 watcher 的终端不会停止 watcher。关闭网页或 Web 服务只会关闭管理界面。`start/start.pyw` 启动的服务没有任何命令行窗口；使用页面右上角“停止服务”结束服务，勾选确认框中的选项可同时取消所有已托管任务的监控。电脑重启后需要重新启动监控。
 
 ### 可以自动监控全部未完成任务吗？
 
@@ -422,7 +434,7 @@ python3 scripts/verify_release.py
 
 ## 开源协议
 
-Codex Auto Resume 使用 [MIT License](LICENSE)。
+Codex Auto Resume 使用 [MIT License](../LICENSE)。
 
 <p align="center">
   <strong>工作留在 Codex，等待交给本机。</strong>

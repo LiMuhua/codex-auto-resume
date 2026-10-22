@@ -2,22 +2,22 @@
 
 ## 当前发布方式
 
-通过 GitHub 分发源码。用户拉取仓库后，macOS 使用根目录 `./resume`，Windows 使用 `resume.cmd` 或 `resume.ps1` 启动。不提供安装包，也不依赖域名、服务器、数据库或独立账户。
+通过 GitHub 分发源码。用户拉取仓库后，Windows 可双击 `start\start.vbs`（无窗口运行 `start\start.pyw`）静默启动并自动打开控制台；macOS 使用 `./start/start`，Windows 终端使用 `start\start.cmd` 或 `start\start.ps1`。不提供安装包，也不依赖域名、服务器、数据库或独立账户。
 
 仓库只保留：
 
 - Python 核心控制器与安全策略
-- macOS/Linux 测试入口 `./resume` 与 Windows 原生启动入口
-- 固定监听本机 `127.0.0.1` 的 Web 管理界面
+- `start/` 下的 macOS/Linux、Windows 和双击启动入口
+- 固定监听本机 `127.0.0.1` 的 Web 管理界面，以及页面内“停止服务”
 - 仓库级 Codex Skill
 - 核心、Web 和前端隔离测试
-- 用户说明与发布卫生检查
+- `docs/` 下的变更记录、中文说明、发布计划与用户说明
 
 仓库不再包含原生 macOS 客户端、PyInstaller/签名/公证脚本、微信小程序、移动端联调代码、npm 依赖和跨设备控制入口。
 
 ## 发布验收
 
-1. 全新拉取后，无第三方依赖运行对应系统的 `--help`、`doctor` 和 `web`。
+1. 全新拉取后，无第三方依赖运行对应系统的 `--help`、`doctor` 和 `web`；验证 `start/start.vbs` / `start/start.pyw` 能静默启动、自动打开页面，并能在页面“停止服务”中选择同时结束所有托管监控进程。
 2. 从仓库外目录调用当前系统的启动器，确认模块定位不依赖当前工作目录。
 3. 运行 Python 核心与 Web 回归测试。
 4. 运行浏览器脚本测试和语法检查。
@@ -27,7 +27,7 @@
 
 ## 发布操作
 
-更新包版本与本文件同目录的 `CHANGELOG.md` 后提交，并推送对应的 `vX.Y.Z` 标签。
+更新包版本与本文件同目录的 `CHANGELOG.md`（即 `docs/CHANGELOG.md`）后提交，并推送对应的 `vX.Y.Z` 标签。
 GitHub Actions 会对标签执行 Windows、macOS、Linux 隔离检查；全部通过后，自动使用变更记录创建正式 GitHub Release，提供 GitHub 生成的源码 ZIP 与 tar.gz。
 标签版本必须与包版本一致；测试失败或缺少变更记录时不发布。发布完成后核实 Release 页面及下载入口，不能仅以标签推送成功作为发布成功。
 

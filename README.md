@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="docs/README.zh-CN.md">简体中文</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#safety-model">Safety</a> ·
@@ -35,6 +35,9 @@
 When a long Codex task hits a usage limit, the work can stop even though the task itself is unfinished. Codex Auto Resume watches one task you explicitly choose, waits for the real usage window to reset, re-checks the task, and starts the next turn in the original conversation.
 
 It does **not** switch accounts, buy credits, redeem resets, approve tool calls, create replacement conversations, or take over every unfinished task.
+
+> [!NOTE]
+> This repository is an independent derivative branched from [progressrdx/codex-auto-resume](https://github.com/progressrdx/codex-auto-resume). It was published as a separate repository instead of using GitHub's fork feature, so issues and pull requests here are not shared with the upstream project.
 
 > [!IMPORTANT]
 > This is an experimental, unofficial companion project and is not affiliated with or endorsed by OpenAI. The project owner has completed two successful macOS runs and one successful Windows 11 run across natural usage reset boundaries. See [Current validation status](#current-validation-status) for the tested scope and remaining limitations.
@@ -66,11 +69,19 @@ It does **not** switch accounts, buy credits, redeem resets, approve tool calls,
 - The Codex desktop app installed, signed in, and kept open
 - Adapted macOS App versions: `26.820.60940 / build 7119`, `26.1002.52244 / build 13536`
 - Currently adapted Windows versions: App `26.901.31953.0`, CLI `0.153.1`
-- Default path: macOS `/Applications/ChatGPT.app`; Windows `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`
+- Default path: macOS `/Applications/ChatGPT.app`; Windows `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe` (Microsoft Store installs are detected automatically under `bin\<hash>\codex.exe`)
 
 Run the Windows version from native PowerShell or Command Prompt, not from inside WSL. This helper connects to the native Windows Codex App named pipe. The Codex Windows App itself supports native Windows and optional WSL workspaces, but those are different execution environments.
 
 Unsupported App versions are rejected instead of silently using an unverified internal protocol.
+
+### Double-click start (Windows)
+
+Double-click `start\start.vbs`. It runs the sibling `start/start.pyw` with `pythonw.exe` (or the windowless `pyw.exe` launcher), so no console window appears at all and it works even when `.pyw` files have no file association. `start/start.pyw` starts the local dashboard as a detached background process, opens the browser, and passes this run's credential in the URL fragment so the page connects automatically. Start-up failures are shown in a message box with the log path. Use **停止服务** in the top-right corner to stop the local server again; the confirmation dialog offers to cancel every enrolled task watcher as well.
+
+If your system already associates `.pyw` with `pythonw.exe`, you can double-click `start\start.pyw` directly; `python start\start.pyw` works too.
+
+On macOS or Linux, `python3 start/start.pyw` does the same. The terminal launchers below remain available for read-only CLI commands and debugging.
 
 ### Let Codex start it for you (recommended for beginners)
 
@@ -78,8 +89,8 @@ After cloning the repository, open the `codex-auto-resume` folder as a project i
 
 ```text
 Read README.md, AGENTS.md, and .agents/skills/codex-auto-resume/SKILL.md first.
-Check that this computer meets the requirements. Use ./resume on macOS and
-.\resume.cmd on Windows. Run doctor first; if the read-only check succeeds,
+Check that this computer meets the requirements. Use ./start/start on macOS and
+.\start\start.cmd on Windows. Run doctor first; if the read-only check succeeds,
 run web and keep the local server running.
 Tell me the exact dashboard URL and the connection credential printed by that
 same server process. Do not select, start, stop, or manage any Codex task until
@@ -95,15 +106,15 @@ When startup succeeds, Codex will report output similar to:
 连接凭据：Jr7...the rest of this run's random value
 ```
 
-Open the dashboard URL in a browser on the same computer, paste that credential, and click **连接**. The credential is created locally by `./resume web` (or `.\resume.cmd web` on Windows); it is **not** an OpenAI API key, ChatGPT password, Codex account token, or GitHub token. You do not obtain it from any website or account settings.
+Open the dashboard URL in a browser on the same computer, paste that credential, and click **连接**. The credential is created locally by `./start/start web` (or `.\start\start.cmd web` on Windows); it is **not** an OpenAI API key, ChatGPT password, Codex account token, or GitHub token. You do not obtain it from any website or account settings.
 
 > [!NOTE]
-> A new random credential is generated every time the Web server starts. It is printed only in that server's terminal output and works only while that process is running. Restarting `./resume web` invalidates the old value. If it is accidentally exposed, stop the Web server with `Control-C` and start it again to rotate the credential.
+> A new random credential is generated every time the Web server starts. It is printed to that server's terminal output (or its private log when started by `start/start.pyw`) and works only while that process is running. `start/start.pyw` also writes it to a user-only session file inside `~/.codex-auto-resume/` so a second launch can re-open the dashboard, and puts it in the URL fragment (never in an HTTP request) for automatic login. Restarting the Web server invalidates the old value. If it is accidentally exposed, use **停止服务** in the dashboard or stop the terminal process, then start it again to rotate the credential.
 
 After the dashboard is connected, you can ask Codex to discover tasks without enrolling any of them:
 
 ```text
-Run the list command for this system (./resume list on macOS or .\resume.cmd list
+Run the list command for this system (./start/start list on macOS or .\start\start.cmd list
 on Windows) and show me the available local Codex tasks. Do not enroll
 anything. I will choose the exact task first.
 ```
@@ -138,13 +149,13 @@ cd codex-auto-resume
 macOS:
 
 ```bash
-./resume doctor
+./start/start doctor
 ```
 
 Windows (PowerShell or Command Prompt):
 
 ```powershell
-.\resume.cmd doctor
+.\start\start.cmd doctor
 ```
 
 `doctor` is read-only. It checks the App version, local connection, and usage windows without running a model or selecting a task.
@@ -154,13 +165,13 @@ Windows (PowerShell or Command Prompt):
 macOS:
 
 ```bash
-./resume web
+./start/start web
 ```
 
 Windows:
 
 ```powershell
-.\resume.cmd web
+.\start\start.cmd web
 ```
 
 The terminal prints a local URL and a new random connection credential. This credential is generated by the local process at startup; it does not come from OpenAI, ChatGPT, Codex, or GitHub:
@@ -174,48 +185,49 @@ Open the URL on the same computer and paste the credential into the page. Copy i
 
 ## Using the dashboard
 
-1. Connect with the credential printed by `./resume web`.
+1. Connect with the credential printed by `./start/start web`, or let `start/start.pyw` connect automatically.
 2. Review the five-hour and weekly usage windows.
 3. Choose **托管长任务** and select one local Codex conversation.
 4. Let the read-only check confirm whether that exact task can be monitored.
 5. Review the cumulative resume budget—the default maximum is 3—and confirm enrollment.
-6. Use **停止监控** whenever you want to cancel future continuations.
+6. Use **停止监控** whenever you want to cancel future continuations. A stopped task keeps a **重新启动** button: one confirmation revalidates its live state and re-arms monitoring with the budget you choose, without repeating the task-selection flow.
+7. Use **停止服务** in the top-right corner to stop the local Web server process itself. Tick the option in that dialog to also cancel all enrolled watchers.
 
-Stopping monitoring does not interrupt work already running in Codex and cannot retract a message already accepted by the App. Closing the browser or the Web server also does not stop an already launched watcher.
+Stopping monitoring does not interrupt work already running in Codex and cannot retract a message already accepted by the App. Closing the browser or the Web server also does not stop an already launched watcher. By default, **停止服务** stops only the dashboard process; tick the option in its dialog to cancel every enrolled watcher as well.
 
 ## CLI usage
 
 The dashboard calls the same guarded entry point. You can use it directly:
 
-The examples below use macOS's `./resume`. On Windows, replace that prefix with `.\resume.cmd`; all remaining arguments are identical.
+The examples below use macOS's `./start/start`. On Windows, replace that prefix with `.\start\start.cmd`; all remaining arguments are identical.
 
 ```bash
 # Discover local conversations; this does not enroll them.
-./resume list
+./start/start list
 
 # Read-only eligibility check for one exact UUID.
-./resume check <TASK_UUID>
+./start/start check <TASK_UUID>
 
 # Start one watcher with the default cumulative budget of 3.
-./resume start <TASK_UUID>
+./start/start start <TASK_UUID>
 
 # Inspect persisted watcher records.
-./resume status
+./start/start status
 
 # Cancel future continuations for that task.
-./resume stop <TASK_UUID>
+./start/start stop <TASK_UUID>
 ```
 
 To deliberately choose a different cumulative limit:
 
 ```bash
-./resume start <TASK_UUID> --max-resumes 5
+./start/start start <TASK_UUID> --max-resumes 5
 ```
 
 If the account reports more than one usage bucket, specify the intended bucket explicitly:
 
 ```bash
-./resume start <TASK_UUID> --limit-id codex
+./start/start start <TASK_UUID> --limit-id codex
 ```
 
 The tool never guesses between multiple buckets.
@@ -277,13 +289,13 @@ Global options go before the subcommand; Web options go after `web`.
 
 | Need | Example |
 | --- | --- |
-| Different local port | `./resume web --port 9000` |
-| Different App location | `./resume --app "/Applications/Your App.app" web` |
-| Different Codex home | `./resume --home /path/to/.codex web` |
-| Different state directory | `./resume --state-dir /private/path web` |
-| Specific Python executable | `PYTHON_BIN=/path/to/python3 ./resume web` |
+| Different local port | `./start/start web --port 9000` |
+| Different App location | `./start/start --app "/Applications/Your App.app" web` |
+| Different Codex home | `./start/start --home /path/to/.codex web` |
+| Different state directory | `./start/start --state-dir /private/path web` |
+| Specific Python executable | `PYTHON_BIN=/path/to/python3 ./start/start web` |
 
-Windows custom path example: `.\resume.cmd --app "C:\path\to\codex.exe" web`. This is normally unnecessary because the current user's default App path is detected automatically.
+Windows custom path example: `.\start\start.cmd --app "C:\path\to\codex.exe" web`. This is normally unnecessary because the current user's default App path is detected automatically.
 
 There is intentionally no option to bind the dashboard to `0.0.0.0`, a LAN address, or a public host.
 
@@ -293,11 +305,11 @@ At a safe point, stop any monitored task you intend to upgrade, then run:
 
 ```bash
 git pull
-./resume doctor
-./resume web
+./start/start doctor
+./start/start web
 ```
 
-On Windows, use `git pull`, `.\resume.cmd doctor`, and `.\resume.cmd web`.
+On Windows, use `git pull`, `.\start\start.cmd doctor`, and `.\start\start.cmd web`.
 
 Updating the checkout does not clear the persistent budget or deduplication ledger. Restarting the Web server rotates the browser credential. Running watchers do not hot-reload new source code.
 
@@ -325,8 +337,8 @@ Validated on a real Windows 11 machine with the Codex desktop App signed in to a
 Current automated suite:
 
 ```text
-Python tests: 108 total (107 passed locally; 1 Windows-only launcher test skipped)
-Browser UI tests: 26 passed
+Python tests: 145 total (134 run on Windows; 11 POSIX/macOS-only tests skipped)
+Browser UI tests: 40 passed
 Runtime dependencies: 0
 ```
 
@@ -348,13 +360,13 @@ The internal App protocol is version-locked. Do not bypass the check. Open an is
 <details>
 <summary><strong>The dashboard cannot connect</strong></summary>
 
-Keep the Web server process running, use the exact URL it printed, and paste the credential from the same run. A credential from an earlier server process is intentionally invalid. On Windows, start it with `.\resume.cmd web`.
+Keep the Web server process running, use the exact URL it printed, and paste the credential from the same run. A credential from an earlier server process is intentionally invalid. On Windows, start it with `.\start\start.cmd web`.
 </details>
 
 <details>
 <summary><strong>A task cannot be enrolled</strong></summary>
 
-Run `./resume check <TASK_UUID>`. Completed, archived, interrupted, empty, approval-blocked, or user-input-blocked tasks are intentionally ineligible.
+Run `./start/start check <TASK_UUID>`. Completed, archived, interrupted, empty, approval-blocked, or user-input-blocked tasks are intentionally ineligible.
 </details>
 
 <details>
@@ -366,7 +378,7 @@ Do not retry automatically and do not delete the state directory to bypass the p
 <details>
 <summary><strong>Port 8765 is already in use</strong></summary>
 
-Use another loopback port, for example `./resume web --port 9000`.
+Use another loopback port, for example `./start/start web --port 9000`.
 </details>
 
 ## Development
@@ -375,7 +387,7 @@ No dependency installation is required for the product or its checked-in tests:
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m compileall -q codex_resume
+python3 -m compileall -q codex_resume start/start.pyw
 node --test tests/test_ui.cjs
 node --check codex_resume/static/app.js
 python3 scripts/verify_release.py
@@ -390,8 +402,10 @@ codex_resume/                 Python core and local Web UI
 tests/                        isolated Python and browser tests
 .agents/skills/               repository-level Codex skill
 scripts/verify_release.py     version and tracked-file hygiene check
-resume                        dependency-free launcher
-resume.cmd / resume.ps1       native Windows launchers
+docs/                         changelog, Chinese README, release plan
+start/start                   dependency-free macOS/Linux launcher
+start/start.cmd / start/start.ps1   native Windows terminal launchers
+start/start.vbs / start.pyw   console-free double-click launcher with auto-login
 ```
 
 ## Contributing
@@ -415,9 +429,9 @@ No. It waits for the account's natural reset and re-checks the real limit state.
 
 No. Everything runs locally on the same computer as the Codex desktop app.
 
-### Will closing the terminal stop monitoring?
+### Will closing the terminal or browser stop monitoring?
 
-Closing the terminal that launched a watcher does not stop that watcher. Closing the Web server only removes the dashboard. Restarting the computer requires starting monitoring again.
+Closing the terminal that launched a watcher does not stop that watcher. Closing the browser or the Web server only removes the dashboard. `start/start.pyw` runs the server without any console window; use **停止服务** in the top-right corner to stop that server, and tick the dialog option if you also want to cancel every enrolled watcher. Restarting the computer requires starting monitoring again.
 
 ### Can it monitor every unfinished task?
 

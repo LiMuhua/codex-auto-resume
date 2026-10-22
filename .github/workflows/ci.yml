@@ -63,7 +63,7 @@ jobs:
           tag = os.environ['RELEASE_TAG']
           if tag != 'v' + __version__:
               raise SystemExit('Version tag does not match package version')
-          sections = Path('CHANGELOG.md').read_text(encoding='utf-8').split('\n## ')
+          sections = Path('docs/CHANGELOG.md').read_text(encoding='utf-8').split('\n## ')
           notes = next((section for section in sections[1:]
                         if section.startswith(__version__ + ' — ')), None)
           if notes is None:
