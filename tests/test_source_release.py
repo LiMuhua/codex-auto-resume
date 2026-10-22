@@ -46,8 +46,11 @@ class SourceReleaseTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows launcher test')
     def test_windows_launcher_works_outside_repository(self):
         with tempfile.TemporaryDirectory() as outside:
+            # start.cmd forces UTF-8 mode, so decode the child's stream the same
+            # way instead of inheriting the GBK console code page.
             result = subprocess.run(['cmd.exe', '/d', '/s', '/c', str(ROOT / 'start' / 'start.cmd'), '--help'],
-                                    cwd=outside, text=True, capture_output=True, timeout=10)
+                                    cwd=outside, text=True, encoding='utf-8',
+                                    capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Codex App', result.stdout)
 
