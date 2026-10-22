@@ -28,3 +28,5 @@
 #task-details .check-result{margin-top:0;scroll-margin-top:0}.back-to-list{margin-bottom:12px;min-height:44px}
 #task-dialog #action-error{flex:none;max-height:20%;overflow:auto}
 @media(max-height:550px){#task-dialog>.dialog-heading{padding:8px 16px}#task-dialog>.dialog-content{padding:8px 16px}.picker-toolbar{flex-wrap:nowrap}.picker-toolbar .meta{font-size:10px}#task-dialog .close-button{width:44px;height:44px}#picker-controls>label{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}}
+.watch-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+#restart-dialog{max-width:520px}#restart-dialog .selected-title{margin-bottom:4px}#restart-dialog .meta{margin-bottom:16px}#restart-dialog .confirmation{margin-top:16px}#restart-dialog .dialog-actions{margin-top:16px}

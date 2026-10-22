@@ -409,3 +409,67 @@ test('disconnect hides the stop-service button and closes its dialog',()=>{
   assert.equal(h.el('stop-service').hidden,true);
   assert.equal(h.el('shutdown-dialog').open,false);
 });
+
+function watchActions(h,index){
+  return h.el('watch-list').children[index].children[1].children[1];
+}
+function restartRow(h,status='stopped',attempts=0,max=3){
+  h.run(`renderWatches([{thread_id:'${A}',enabled:0,status:'${status}',reason:'test reason',attempts:${attempts},max_resumes:${max},updated:1000}])`);
+}
+test('disabled watch rows offer restart without the check flow; enabled rows only stop',()=>{
+  const h=harness();
+  h.run(`renderWatches([{thread_id:'${A}',enabled:0,status:'stopped',reason:'done',attempts:2,max_resumes:3,updated:1000},{thread_id:'${B}',enabled:1,status:'watching',reason:'running',attempts:0,max_resumes:3,updated:1000}])`);
+  assert.deepEqual(watchActions(h,0).children.map(b=>b.textContent),['重新启动','检查任务']);
+  assert.deepEqual(watchActions(h,1).children.map(b=>b.textContent),['停止监控']);
+});
+test('uncertain records cannot be restarted from the list',()=>{
+  const h=harness();restartRow(h,'uncertain',1);
+  assert.deepEqual(watchActions(h,0).children.map(b=>b.textContent),['检查任务']);
+});
+test('restart requires consent and sends one guarded start with the chosen budget',{timeout:2000},async()=>{
+  const h=harness();restartRow(h,'stopped',3,3);
+  watchActions(h,0).children[0].emit('click');
+  assert.equal(h.el('restart-dialog').open,true);
+  assert.equal(h.el('restart-task').textContent,'Task A');
+  assert.equal(h.el('restart-max').value,'4');
+  assert.equal(h.el('confirm-restart').disabled,true);
+  h.el('confirm-restart-check').checked=true;h.el('confirm-restart-check').emit('change');
+  assert.equal(h.el('confirm-restart').disabled,false);
+  h.el('restart-max').value='5';
+  const request=h.run('restartTask()');
+  await tick();
+  assert.equal(h.pending[0].url,'/api/start');
+  assert.deepEqual(JSON.parse(h.pending[0].options.body),{threadId:A,maxResumes:5,confirmed:true});
+  h.pending[0].reply({threadId:A,status:'watching'});await request;
+  assert.equal(h.el('restart-dialog').open,false);
+  assert.match(h.el('notice').textContent,/重新提交监控/);
+  assert.equal(h.run('pendingMutation()'),null);
+});
+test('invalid restart budget never dispatches',async()=>{
+  const h=harness();restartRow(h);
+  watchActions(h,0).children[0].emit('click');
+  h.el('confirm-restart-check').checked=true;h.el('confirm-restart-check').emit('change');
+  h.el('restart-max').value='0';
+  await h.run('restartTask()');
+  assert.equal(h.pending.length,0);
+  assert.match(h.el('restart-error').textContent,/1 到 100/);
+});
+test('a closed restart dialog ignores late success or failure and refuses same-UUID reopen',{timeout:2000},async()=>{
+  for(const outcome of ['success','failure']){
+    const h=harness();restartRow(h);
+    watchActions(h,0).children[0].emit('click');
+    h.el('confirm-restart-check').checked=true;h.el('confirm-restart-check').emit('change');
+    const request=h.run('restartTask()');
+    await tick();
+    h.el('restart-dialog').close();
+    watchActions(h,0).children[0].emit('click');
+    assert.equal(h.el('restart-dialog').open,false);
+    if(outcome==='success') h.pending[0].reply({threadId:A,status:'watching'});
+    else h.pending[0].reply({error:'late'},500);
+    await request;
+    assert.equal(h.el('restart-dialog').open,false);
+    assert.doesNotMatch(h.el('notice').textContent,/重新提交监控|重启结果需检查/);
+    assert.equal(h.el('restart-error').textContent,'');
+    assert.equal(h.run('starting'),false);
+  }
+});

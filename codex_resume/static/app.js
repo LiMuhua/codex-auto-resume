@@ -12,6 +12,8 @@ let authGeneration = 0;
 let threads = [];
 let checked = null;
 let selectedStop = null;
+let restartTarget = null;
+let restartGeneration = 0;
 let reading = false;
 let quota = null;
 let lastQuotaFetch = 0;
@@ -61,6 +63,7 @@ function renderMutation() {
   $('acknowledge-mutation').disabled=!pending || !!unavailable || !connected || !$('confirm-mutation-review').checked || lastWatchRead <= (pending.createdAt || 0);
   $('start-button').disabled=starting || !!pending || !!unavailable;
   $('confirm-stop').disabled=!!pending || !!unavailable;
+  $('confirm-restart').disabled=starting || !$('confirm-restart-check').checked || !!pending || !!unavailable;
 }
 async function acknowledgeMutation() {
   const pending=pendingMutation();
@@ -119,7 +122,9 @@ function forget() {
   quota = null; threads = []; checked = null; lastQuotaFetch = 0; assessments.clear();
   if ($('task-dialog').open) $('task-dialog').close();
   if ($('stop-dialog').open) $('stop-dialog').close();
+  if ($('restart-dialog').open) $('restart-dialog').close();
   if ($('shutdown-dialog').open) $('shutdown-dialog').close();
+  $('confirm-restart-check').checked = false;
   $('shutdown-watches').checked = false;
   $('watch-list').replaceChildren(node('p', 'empty-state', '已断开页面。后台监控不会因此停止；请重新连接后查看或停止。'));
   $('watch-updated').textContent = '监控状态未知';
@@ -194,8 +199,21 @@ function renderWatches(rows,readStarted=Date.now()) {
     if (row.process === 'not_running') meta.append(node('span','error','监控进程已退出，请检查后重新开启'));
     main.append(meta);
     const state=states[row.status] || ['未知状态','warning']; side.append(node('span',`pill ${state[1]}`,state[0]));
-    const button=node('button','button secondary',row.enabled ? '停止监控' : '检查任务');
-    button.addEventListener('click',()=>row.enabled ? openStop(row) : openChooser(row.thread_id)); side.append(button); card.append(main,side); return card;
+    const actions=node('div','watch-actions');
+    if(row.enabled) {
+      const stop=node('button','button secondary','停止监控');
+      stop.type='button'; stop.addEventListener('click',()=>openStop(row)); actions.append(stop);
+    } else {
+      // A listed record is an explicit user selection; the guarded CLI start
+      // still revalidates live state before arming anything.
+      if(row.status!=='uncertain') {
+        const restart=node('button','button primary','重新启动');
+        restart.type='button'; restart.addEventListener('click',()=>openRestart(row)); actions.append(restart);
+      }
+      const inspect=node('button','button secondary','检查任务');
+      inspect.type='button'; inspect.addEventListener('click',()=>openChooser(row.thread_id)); actions.append(inspect);
+    }
+    side.append(actions); card.append(main,side); return card;
   });
   $('watch-list').replaceChildren(...cards);
 }
@@ -361,6 +379,42 @@ async function stopTask() {
   catch(e) { if(generation===authGeneration){$('stop-error').textContent=e.message;notice('停止结果需检查。请刷新记录并人工核对；不会自动重试。',true);} }
   finally { busy($('confirm-stop'),false,'停止监控');renderMutation(); }
 }
+function openRestart(row) {
+  if(starting) { notice('上一次操作仍在处理，请先等待结果并查看监控记录。',true); return; }
+  if(!row || row.enabled || row.status==='uncertain') return;
+  restartTarget=row.thread_id; restartGeneration+=1;
+  const attempts=Number.isInteger(row.attempts) ? row.attempts : 0;
+  const maximum=Number.isInteger(row.max_resumes) ? row.max_resumes : 3;
+  $('restart-task').textContent=titleFor(row.thread_id);
+  $('restart-reason').textContent=`${row.reason || '上次状态未知'} · 累计尝试 ${attempts} 次`;
+  $('restart-max').value=String(Math.min(100,Math.max(1,maximum,attempts+1)));
+  $('restart-error').textContent='';
+  $('confirm-restart-check').checked=false;
+  $('restart-dialog').showModal();
+  renderMutation();
+}
+async function restartTask() {
+  if(!restartTarget || starting) return;
+  if(!$('confirm-restart-check').checked) { $('restart-error').textContent='请先确认只重新启动这个任务。'; return; }
+  const maximum=Number($('restart-max').value);
+  if(!Number.isInteger(maximum) || maximum<1 || maximum>100) { $('restart-error').textContent='累计续跑上限应为 1 到 100 的整数。'; return; }
+  const target=restartTarget, generation=restartGeneration, auth=authGeneration;
+  const current=()=>generation===restartGeneration && target===restartTarget
+    && auth===authGeneration && $('restart-dialog').open;
+  starting=true; busy($('confirm-restart'),true,'正在重启…'); $('restart-error').textContent='';
+  try {
+    const result=await mutate('start',{threadId:target,maxResumes:maximum,confirmed:true});
+    if(!current()) return;
+    $('restart-dialog').close();
+    notice(`任务已重新提交监控，当前状态：${(states[result.status]||['待确认'])[0]}。请以下方监控记录为准。`); await refresh();
+  } catch(e) {
+    if(!current()) return;
+    $('restart-error').textContent=e.message;
+    notice('重启结果需检查。请先刷新监控记录，再决定是否重新操作。',true); await refresh();
+  } finally {
+    starting=false; busy($('confirm-restart'),false,'重新启动'); renderMutation();
+  }
+}
 async function shutdownService() {
   const generation=authGeneration;
   const stopWatches=$('shutdown-watches').checked===true;
@@ -379,7 +433,7 @@ async function shutdownService() {
     if(generation===authGeneration){$('shutdown-error').textContent=e.message;notice('未能确认服务已停止，请检查本机后台进程。',true);}
   } finally { busy($('confirm-shutdown'),false,'停止服务'); }
 }
-for (const dialog of [$('task-dialog'), $('stop-dialog'), $('shutdown-dialog')]) {
+for (const dialog of [$('task-dialog'), $('stop-dialog'), $('restart-dialog'), $('shutdown-dialog')]) {
   dialog.addEventListener('keydown', event=>{
     if(event.key==='Escape') { event.preventDefault(); dialog.close(); }
   });
@@ -396,6 +450,10 @@ $('check-form').addEventListener('submit',checkTask);
 $('start-form').addEventListener('submit',startTask);
 $('cancel-stop').addEventListener('click',()=>$('stop-dialog').close());
 $('confirm-stop').addEventListener('click',stopTask);
+$('cancel-restart').addEventListener('click',()=>$('restart-dialog').close());
+$('confirm-restart').addEventListener('click',restartTask);
+$('confirm-restart-check').addEventListener('change',renderMutation);
+$('restart-dialog').addEventListener('close',()=>{restartGeneration+=1;restartTarget=null;$('confirm-restart-check').checked=false;renderMutation();});
 $('disconnect').addEventListener('click',()=>{forget();notice('页面已断开，后台监控不受影响。');});
 $('stop-service').addEventListener('click',()=>{$('shutdown-error').textContent='';$('shutdown-dialog').showModal();});
 $('cancel-shutdown').addEventListener('click',()=>$('shutdown-dialog').close());
