@@ -68,12 +68,12 @@ It does **not** switch accounts, buy credits, redeem resets, approve tool calls,
 - Python 3.9 or newer
 - The Codex desktop app installed, signed in, and kept open
 - Adapted macOS App versions: `26.820.60940 / build 7119`, `26.1002.52244 / build 13536`
-- Currently adapted Windows versions: App `26.901.31953.0`, CLI `0.153.1`
+- Tested Windows versions: App `26.901.31953.0`, CLI `0.153.1` (exact-version enforcement is opt-in)
 - Default path: macOS `/Applications/ChatGPT.app`; Windows `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe` (Microsoft Store installs are detected automatically under `bin\<hash>\codex.exe`)
 
 Run the Windows version from native PowerShell or Command Prompt, not from inside WSL. This helper connects to the native Windows Codex App named pipe. The Codex Windows App itself supports native Windows and optional WSL workspaces, but those are different execution environments.
 
-Unsupported App versions are rejected instead of silently using an unverified internal protocol.
+The macOS App versions above remain whitelisted. Windows version enforcement is off by default for local experiments: set `ENFORCE_WINDOWS_VERSION = True` at the top of `codex_resume/app.py` to restore the exact App/CLI whitelist. Disabling it skips only the version whitelist; package discovery, IPC protocol versions, and send-time safety checks stay active. Re-verify the protocol after a Codex update before relying on a new build.
 
 ### Double-click start (Windows)
 
@@ -324,13 +324,13 @@ Updating the checkout does not clear the persistent budget or deduplication ledg
 
 Validated locally:
 
-- App version and local IPC compatibility checks;
+- macOS App version checks, opt-in Windows App/CLI version checks, and local IPC compatibility checks;
 - read-only conversation and usage-window discovery;
 - isolated policy, persistence, locking, cancellation, and transport behavior;
 - authenticated loopback Web API and browser UI behavior;
 - stale-response, stale-session, duplicate-click, and uncertain-mutation protection;
 - source launcher behavior outside the repository directory;
-- Windows named-pipe transport, App/CLI version guards, background locking, and selector-free read-only queries;
+- Windows named-pipe transport, opt-in App/CLI version guards, background locking, and selector-free read-only queries;
 - isolated CI on Windows, macOS, and Linux.
 
 Validated with a real account on the currently supported macOS Codex desktop App version:
@@ -344,7 +344,7 @@ Validated on a real Windows 11 machine with the Codex desktop App signed in to a
 Current automated suite:
 
 ```text
-Python tests: 154 total (143 run on Windows; 11 POSIX/macOS-only tests skipped)
+Python tests: 155 total (144 run on Windows; 11 POSIX/macOS-only tests skipped)
 Browser UI tests: 42 passed
 Runtime dependencies: 0
 ```

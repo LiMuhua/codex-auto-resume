@@ -794,19 +794,31 @@ class TransportTests(unittest.TestCase):
     @patch('codex_resume.app.subprocess.run')
     def test_windows_version_requires_exact_package_and_cli(self, run, package):
         run.return_value = SimpleNamespace(returncode=0, stdout='codex-cli 0.153.1\n')
-        with tempfile.TemporaryDirectory() as directory:
-            binary=Path(directory)/'codex.exe'; binary.touch()
-            result=check_version(binary, 'windows')
+        with patch('codex_resume.app.ENFORCE_WINDOWS_VERSION', True):
+            with tempfile.TemporaryDirectory() as directory:
+                binary=Path(directory)/'codex.exe'; binary.touch()
+                result=check_version(binary, 'windows')
         self.assertEqual(result['platform'], 'windows')
         self.assertEqual(result['cliVersion'], '0.153.1')
 
     @patch('codex_resume.app.windows_package_version', return_value='99.0.0.0')
     @patch('codex_resume.app.subprocess.run')
-    def test_windows_future_version_fails_closed(self, run, package):
+    def test_windows_future_version_fails_closed_when_enabled(self, run, package):
         run.return_value = SimpleNamespace(returncode=0, stdout='codex-cli 0.153.1\n')
+        with patch('codex_resume.app.ENFORCE_WINDOWS_VERSION', True):
+            with tempfile.TemporaryDirectory() as directory:
+                binary=Path(directory)/'codex.exe'; binary.touch()
+                with self.assertRaises(AppError): check_version(binary, 'windows')
+
+    @patch('codex_resume.app.windows_package_version', return_value='99.0.0.0')
+    @patch('codex_resume.app.subprocess.run')
+    def test_windows_version_check_is_disabled_by_default(self, run, package):
+        run.return_value = SimpleNamespace(returncode=1, stdout='codex-cli 99.0.0\n')
         with tempfile.TemporaryDirectory() as directory:
             binary=Path(directory)/'codex.exe'; binary.touch()
-            with self.assertRaises(AppError): check_version(binary, 'windows')
+            result=check_version(binary, 'windows')
+        self.assertEqual(result, {'platform': 'windows', 'version': '99.0.0.0',
+                                  'cliVersion': '99.0.0'})
 
     def test_optional_ephemeral_normalization_is_limited_to_verified_build(self):
         versions = [None,

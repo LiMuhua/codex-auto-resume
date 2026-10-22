@@ -22,6 +22,10 @@ SUPPORTED_MAC_APPS = {
 }
 SUPPORTED_WINDOWS_APPS = {'26.901.31953.0', '26.901.31953'}
 SUPPORTED_WINDOWS_CLIS = {'0.153.1'}
+# Windows-only local experiment switch. False skips the exact App/CLI version
+# whitelist; package discovery, IPC protocol versions, and send-time safety checks stay on.
+# Re-enable after re-verifying the protocol of a new App build.
+ENFORCE_WINDOWS_VERSION = False
 MAX_FRAME = 32 * 1024 * 1024
 DEFAULT_CONTINUATION = ('额度恢复后，请继续本会话原有的未完成工作。先核对当前进度与工作区，'
                         '不要重复已完成步骤，不扩大范围，不绕过审批。若工作已经完成或需要用户决定，请明确说明并停止。')
@@ -68,7 +72,10 @@ def check_version(app_path, system=None):
             app_version = windows_package_version()
         except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
             raise AppError(str(exc) or '无法核验 Windows Codex App 版本') from exc
-        if result.returncode or cli_version not in SUPPORTED_WINDOWS_CLIS or app_version not in SUPPORTED_WINDOWS_APPS:
+        if ENFORCE_WINDOWS_VERSION and (
+                result.returncode
+                or cli_version not in SUPPORTED_WINDOWS_CLIS
+                or app_version not in SUPPORTED_WINDOWS_APPS):
             raise AppError('Windows App 版本不在已验证范围内；停止操作，需先适配新版本')
         return {'platform': 'windows', 'version': app_version, 'cliVersion': cli_version}
     path = Path(app_path)

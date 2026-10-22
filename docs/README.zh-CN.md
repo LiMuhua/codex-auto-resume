@@ -67,12 +67,12 @@
 - Python 3.9 或更高版本
 - 已安装、登录并保持打开的 Codex 桌面 App
 - macOS 当前适配版本：`26.820.60940 / build 7119`、`26.1002.52244 / build 13536`
-- Windows 当前适配版本：App `26.901.31953.0`、CLI `0.153.1`
+- Windows 已测试版本：App `26.901.31953.0`、CLI `0.153.1`（精确版本白名单默认关闭，可按需启用）
 - 默认路径：macOS `/Applications/ChatGPT.app`；Windows `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`（Microsoft Store 版本会自动查找 `bin\<哈希>\codex.exe`）
 
 Windows 版请在 Windows 原生 PowerShell 或命令提示符中运行，不要放到 WSL 里运行。本工具需要连接 Windows Codex App 的本机命名管道。Codex 官方 Windows App 本身支持原生 Windows 和可选 WSL 工作区，但这是两个不同的运行环境。
 
-遇到未验证的 App 版本时，工具会拒绝运行，而不是猜测内部协议。
+macOS 仍按上表校验版本。Windows 的精确版本白名单默认关闭，供本地实验使用；将 `codex_resume/app.py` 顶部的 `ENFORCE_WINDOWS_VERSION` 改为 `True` 可恢复 App/CLI 精确版本检查。关闭时只跳过版本白名单，包定位、IPC 协议版本和发送前安全校验仍然生效；Codex 更新后应先重新验证协议。
 
 ### 双击启动（Windows）
 
@@ -319,13 +319,13 @@ Windows 对应命令为 `git pull`、`.\start\start.cmd doctor`、`.\start\start
 
 已完成本地验证：
 
-- App 版本与本地 IPC 兼容检查；
+- macOS App 版本校验、可选的 Windows App/CLI 版本校验，以及本地 IPC 兼容检查；
 - 对话和额度窗口的只读读取；
 - 隔离的策略、持久化、进程锁、取消和传输测试；
 - 带凭据的回环 Web API 和浏览器界面；
 - 过期响应、过期会话、重复点击和不确定写操作保护；
 - 从仓库外目录调用源码启动器；
-- Windows 命名管道、App/CLI 版本保护、后台进程锁和非文件描述符的只读查询路径；
+- Windows 命名管道、可选的 App/CLI 版本保护、后台进程锁和非文件描述符的只读查询路径；
 - GitHub Actions 同时在 Windows、macOS 和 Linux 上运行隔离回归。
 
 已在当前支持的 macOS Codex 桌面 App 版本上完成真实账户验证：
@@ -339,7 +339,7 @@ Windows 对应命令为 `git pull`、`.\start\start.cmd doctor`、`.\start\start
 当前自动化测试：
 
 ```text
-Python：154 项（Windows 本机运行 143 项，11 项 POSIX/macOS 专用测试跳过）
+Python：155 项（Windows 本机运行 144 项，11 项 POSIX/macOS 专用测试跳过）
 浏览器 UI：42 项通过
 运行时第三方依赖：0
 ```
@@ -406,7 +406,7 @@ python3 scripts/verify_release.py
 - 隐去任务 UUID、对话正文、机器路径、连接凭据和账号信息；
 - 不要用真实业务任务演示写入路径问题。
 
-安全相关改动需要增加隔离回归测试，并保留版本保护、取消、预算、防重复以及“不确定就不重试”的规则。
+安全相关改动需要增加隔离回归测试，并保留 IPC 协议校验、可选的版本白名单、取消、预算、防重复以及“不确定就不重试”的规则。
 
 ## 常见问题
 
